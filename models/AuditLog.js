@@ -16,9 +16,10 @@ const auditLogSchema = new mongoose.Schema({
     index: true
   },
 
+  // Supabase UUID string — there is no Mongo User model, so this is never
+  // an ObjectId (was previously typed as one and silently stored null).
   userId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
+    type: String
   },
 
   company: {
@@ -40,7 +41,7 @@ const auditLogSchema = new mongoose.Schema({
 
   resourceType: {
     type: String,
-    enum: ['user', 'company', 'project', 'dataset', 'model', 'training', 'inference'],
+    enum: ['user', 'company', 'project', 'dataset', 'model', 'training', 'inference', 'action_item'],
     required: true,
     index: true
   },

@@ -30,7 +30,10 @@ const PERMISSIONS = {
     'viewProjects',
     'viewDatasets',
     'viewModels',
-    'viewInference'
+    'viewInference',
+    'viewActions',
+    'manageActions',
+    'approveActions'
   ],
   workspace_admin: [
     'manageWorkspace',
@@ -50,7 +53,10 @@ const PERMISSIONS = {
     'viewProjects',
     'viewDatasets',
     'viewModels',
-    'viewInference'
+    'viewInference',
+    'viewActions',
+    'manageActions',
+    'approveActions'
   ],
   ml_engineer: [
     'uploadDatasets',
@@ -62,7 +68,8 @@ const PERMISSIONS = {
     'viewProjects',
     'viewDatasets',
     'viewModels',
-    'viewInference'
+    'viewInference',
+    'viewActions'
   ],
   operator: [
     'runInference',
@@ -74,7 +81,9 @@ const PERMISSIONS = {
     'viewDatasets',
     'viewModels',
     'viewInference',
-    'viewRawDatasetImages'
+    'viewRawDatasetImages',
+    'viewActions',
+    'manageActions'
   ],
   viewer: [
     'viewProjects',
@@ -82,7 +91,8 @@ const PERMISSIONS = {
     'viewModels',
     'viewInference',
     'viewInferenceResults',
-    'viewRawDatasetImages'
+    'viewRawDatasetImages',
+    'viewActions'
   ]
 };
 

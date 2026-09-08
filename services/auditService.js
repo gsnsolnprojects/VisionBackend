@@ -14,7 +14,7 @@ const AuditLog = require('../models/AuditLog');
  *
  * @param {Object} options
  * @param {string} options.action - 'create' | 'update' | 'delete' | 'view' | 'execute'
- * @param {string} options.resourceType - 'user' | 'company' | 'project' | 'dataset' | 'model' | 'training' | 'inference'
+ * @param {string} options.resourceType - 'user' | 'company' | 'project' | 'dataset' | 'model' | 'training' | 'inference' | 'action_item'
  * @param {string} [options.resourceId] - ID of the resource
  * @param {Object} [options.details] - Additional JSON payload
  * @param {Object} [options.req] - Optional Express request (for ip/userAgent/user)
@@ -23,7 +23,7 @@ async function logAction({ action, resourceType, resourceId, details, req }) {
   try {
     const log = new AuditLog({
       logId: `log_${Date.now()}_${uuidv4().substring(0, 8)}`,
-      userId: req?.user?._id || null,
+      userId: req?.user?.id || null,
       company: req?.user?.company || details?.company || null,
       project: details?.project || null,
       action,

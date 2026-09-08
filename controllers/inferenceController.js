@@ -13,6 +13,7 @@ const { inferenceQueue } = require('../queue');
 const storageAdapter = require('../services/storageAdapter');
 const auditService = require('../services/auditService');
 const { buildWorkspaceFilter, validateWorkspaceAccess, canAccessAllWorkspaces } = require('../utils/workspaceScoping');
+const { resolveInferenceImagePath } = require('../utils/resolveInferenceImagePath');
 const fs = require('fs');
 const fsPromises = require('fs').promises;
 const path = require('path');
@@ -1317,35 +1318,10 @@ const getAnnotatedImage = async (req, res) => {
     }
 
     // ✅ Determine which folder to look in
-    let imagePath = null;
-    let basePath = null;
+    const resolved = resolveInferenceImagePath(inferenceJob, filename, folder);
 
-    if (folder === 'good' && inferenceJob.results.goodImagesPath) {
-      imagePath = path.join(inferenceJob.results.goodImagesPath, filename);
-      basePath = inferenceJob.results.goodImagesPath;
-    } else if (folder === 'defect' && inferenceJob.results.defectImagesPath) {
-      imagePath = path.join(inferenceJob.results.defectImagesPath, filename);
-      basePath = inferenceJob.results.defectImagesPath;
-    } else {
-      // ✅ Default: try good/, then defect/, then annotated/ (for backward compatibility)
-      const searchPaths = [
-        { path: inferenceJob.results.goodImagesPath, name: 'good' },
-        { path: inferenceJob.results.defectImagesPath, name: 'defect' },
-        { path: inferenceJob.results.annotatedImagesPath, name: 'annotated' }
-      ].filter(p => p.path); // Filter out null/undefined paths
-
-      for (const searchPath of searchPaths) {
-        const testPath = path.join(searchPath.path, filename);
-        if (fs.existsSync(testPath)) {
-          imagePath = testPath;
-          basePath = searchPath.path;
-          break;
-        }
-      }
-    }
-
-    // ✅ If still not found, return 404
-    if (!imagePath || !basePath) {
+    // ✅ If not found, return 404
+    if (!resolved) {
       return res.status(404).json({
         error: 'File not found',
         filename: filename,
@@ -1355,25 +1331,7 @@ const getAnnotatedImage = async (req, res) => {
       });
     }
 
-    // ✅ Security: Prevent directory traversal
-    const resolvedPath = path.resolve(imagePath);
-    const resolvedBasePath = path.resolve(basePath);
-    
-    if (!resolvedPath.startsWith(resolvedBasePath)) {
-      return res.status(403).json({
-        error: 'Access denied',
-        message: 'Invalid file path'
-      });
-    }
-
-    // ✅ Check if file exists (double check)
-    if (!fs.existsSync(imagePath)) {
-      return res.status(404).json({
-        error: 'File not found',
-        filename: filename,
-        inferenceId: inferenceId
-      });
-    }
+    const { imagePath } = resolved;
 
     // ✅ Send file (works for both images and videos)
     // Set appropriate content type based on file extension
@@ -1570,6 +1528,243 @@ const deleteInference = async (req, res) => {
 
   } catch (error) {
     console.error('Error deleting inference:', error);
+    return res.status(500).json({
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+};
+
+/**
+ * Recomputes job-level detection/corrosion aggregates from a filtered list of
+ * per-image metadata entries. Mirrors the averaging the Python inference
+ * script does at job-completion time (mean of per-image percents, weighted
+ * by how many images actually had that class), so a job that's had an image
+ * removed reports numbers consistent with a job that was simply never given
+ * that image in the first place.
+ */
+function recomputeAggregatesFromImages(images, classNames) {
+  let totalDetections = 0;
+  let confidenceSum = 0;
+  let confidenceCount = 0;
+  const byClassDetections = {}; // className -> { count, confidenceSum, confidenceCount }
+  const corrosionBuckets = {}; // classId -> { class, classId, percentSum, n, count }
+
+  for (const image of images) {
+    for (const detection of image.detections || []) {
+      totalDetections += 1;
+      if (typeof detection.confidence === 'number') {
+        confidenceSum += detection.confidence;
+        confidenceCount += 1;
+      }
+      const key = detection.class || 'unknown';
+      const bucket = byClassDetections[key] || { count: 0, confidenceSum: 0, confidenceCount: 0 };
+      bucket.count += 1;
+      if (typeof detection.confidence === 'number') {
+        bucket.confidenceSum += detection.confidence;
+        bucket.confidenceCount += 1;
+      }
+      byClassDetections[key] = bucket;
+    }
+
+    for (const row of image.byClass || []) {
+      const key = row.classId ?? row.class;
+      const bucket = corrosionBuckets[key] || {
+        class: row.class,
+        classId: row.classId ?? null,
+        percentSum: 0,
+        n: 0,
+        count: 0,
+      };
+      if (typeof row.percent === 'number') {
+        bucket.percentSum += row.percent;
+        bucket.n += 1;
+      }
+      bucket.count += Number(row.count) || 0;
+      corrosionBuckets[key] = bucket;
+    }
+  }
+
+  const detectionsByClass = Object.entries(byClassDetections).map(([className, b]) => ({
+    className,
+    count: b.count,
+    avgConfidence: b.confidenceCount ? b.confidenceSum / b.confidenceCount : 0,
+  }));
+
+  const percents = images
+    .map((img) => img.corrosionPercentTotal)
+    .filter((n) => typeof n === 'number' && Number.isFinite(n));
+  const meanCorrosionPercent = percents.length
+    ? percents.reduce((sum, n) => sum + n, 0) / percents.length
+    : 0;
+
+  const byClass = Object.values(corrosionBuckets)
+    .map((b) => ({
+      class: b.class,
+      classId: b.classId,
+      meanPercent: b.n ? b.percentSum / b.n : 0,
+      count: b.count,
+    }))
+    .sort((a, b) => b.meanPercent - a.meanPercent);
+
+  return {
+    totalDetections,
+    averageConfidence: confidenceCount ? confidenceSum / confidenceCount : 0,
+    detectionsByClass,
+    corrosionStats: {
+      imageCount: images.length,
+      meanCorrosionPercent,
+      byClass,
+      classNames: classNames || [],
+    },
+  };
+}
+
+/**
+ * DELETE /api/inference/:inferenceId/image/:filename
+ *
+ * Deletes a single image from a completed inference job's results and
+ * recomputes the job's aggregate stats (mean corrosion %, byClass, detection
+ * counts) from the remaining images. Used by the mobile app so a crew member
+ * can drop a bad/duplicate photo after inspecting a part, without having to
+ * delete and redo the whole part.
+ */
+const deleteInferenceImage = async (req, res) => {
+  try {
+    const { inferenceId, filename } = req.params;
+
+    if (!inferenceId || !filename) {
+      return res.status(400).json({
+        error: 'Missing required parameters: inferenceId, filename'
+      });
+    }
+
+    const { checkPermission } = require('../utils/permissions');
+    const userRole = req.user ? req.user.role : null;
+    const userId = req.user ? req.user.id : null;
+
+    if (!userRole || !userId) {
+      return res.status(401).json({ error: 'Unauthorized', message: 'Authentication required' });
+    }
+
+    const hasDeleteProjects = checkPermission(userRole, 'deleteProjects');
+    const hasDeleteOwnInference = checkPermission(userRole, 'deleteOwnInference');
+
+    if (!hasDeleteProjects && !hasDeleteOwnInference) {
+      return res.status(403).json({
+        error: 'Permission denied',
+        message: 'You do not have permission to modify inference jobs'
+      });
+    }
+
+    const inferenceJob = await InferenceJob.findOne({ inferenceId });
+    if (!inferenceJob) {
+      return res.status(404).json({ error: 'Inference job not found', inferenceId });
+    }
+
+    if (!canAccessAllWorkspaces(req.user)) {
+      const accessValidation = validateWorkspaceAccess(req.user, inferenceJob.company);
+      if (!accessValidation.allowed) {
+        return res.status(403).json({
+          error: 'Permission denied',
+          message: accessValidation.error || 'You do not have access to this inference job'
+        });
+      }
+    }
+
+    if (!hasDeleteProjects && hasDeleteOwnInference) {
+      if (!inferenceJob.createdBy || inferenceJob.createdBy !== userId) {
+        return res.status(403).json({
+          error: 'Permission denied',
+          message: 'You can only modify your own inference jobs'
+        });
+      }
+    }
+
+    if (inferenceJob.status === 'running' || inferenceJob.status === 'queued') {
+      return res.status(400).json({
+        error: 'Cannot modify a job that is still processing',
+        status: inferenceJob.status
+      });
+    }
+
+    const metadataPath = inferenceJob.results && inferenceJob.results.metadataPath;
+    if (!metadataPath || !fs.existsSync(metadataPath)) {
+      return res.status(404).json({ error: 'Results metadata not found for this job' });
+    }
+
+    const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+    const matchesFile = (f) => f && path.basename(String(f.filePath || '')) === filename;
+
+    const imageEntry = (metadata.images || []).find(matchesFile) || (metadata.files || []).find(matchesFile);
+    if (!imageEntry) {
+      return res.status(404).json({ error: 'Image not found in this job', filename });
+    }
+    if (imageEntry.fileType && imageEntry.fileType !== 'image') {
+      return res.status(400).json({ error: 'Only images can be deleted this way, not videos' });
+    }
+    if ((metadata.images || []).length <= 1 && (metadata.files || []).filter((f) => f.fileType !== 'video').length <= 1) {
+      return res.status(400).json({
+        error: 'Cannot delete the last image',
+        message: 'A part must keep at least one photo. Delete the whole part instead.'
+      });
+    }
+
+    metadata.images = (metadata.images || []).filter((f) => !matchesFile(f));
+    metadata.files = (metadata.files || []).filter((f) => !matchesFile(f));
+
+    const recomputed = recomputeAggregatesFromImages(metadata.images, metadata.classNames);
+    metadata.totalImages = metadata.images.length;
+    metadata.totalFiles = metadata.files.length;
+    metadata.totalDetections = recomputed.totalDetections;
+    metadata.averageConfidence = recomputed.averageConfidence;
+    metadata.detectionsByClass = recomputed.detectionsByClass;
+    metadata.corrosionStats = recomputed.corrosionStats;
+
+    // Write atomically so a crash mid-write can never leave a corrupt metadata.json.
+    const tmpPath = `${metadataPath}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(metadata, null, 2));
+    fs.renameSync(tmpPath, metadataPath);
+
+    const wasDefect = (imageEntry.detectionCount ?? imageEntry.instanceCount ?? 0) > 0;
+    const dirsToClean = [
+      inferenceJob.results.goodImagesPath,
+      inferenceJob.results.defectImagesPath,
+      inferenceJob.results.annotatedImagesPath,
+    ].filter(Boolean);
+    for (const dir of dirsToClean) {
+      const filePath = path.join(dir, filename);
+      if (fs.existsSync(filePath)) {
+        try {
+          fs.unlinkSync(filePath);
+        } catch (err) {
+          console.warn(`⚠️ Could not delete image file: ${filePath} — ${err.message}`);
+        }
+      }
+    }
+
+    inferenceJob.results.totalDetections = recomputed.totalDetections;
+    inferenceJob.results.averageConfidence = recomputed.averageConfidence;
+    inferenceJob.results.detectionsByClass = recomputed.detectionsByClass;
+    inferenceJob.results.corrosionStats = recomputed.corrosionStats;
+    if (wasDefect) {
+      inferenceJob.results.defectCount = Math.max(0, (inferenceJob.results.defectCount || 0) - 1);
+    } else {
+      inferenceJob.results.goodCount = Math.max(0, (inferenceJob.results.goodCount || 0) - 1);
+    }
+    inferenceJob.markModified('results');
+    await inferenceJob.save();
+
+    return res.status(200).json({
+      inferenceId,
+      filename,
+      message: 'Image deleted',
+      remainingImages: metadata.images.length,
+      corrosionStats: recomputed.corrosionStats
+    });
+
+  } catch (error) {
+    console.error('Error deleting inference image:', error);
     return res.status(500).json({
       error: 'Internal server error',
       message: error.message
@@ -2003,6 +2198,7 @@ module.exports = {
   getAnnotatedImage,
   cancelInference,
   deleteInference,
+  deleteInferenceImage,
   listInferenceJobs,
   listAvailableModels,
   listDatasetsWithTestFolders,

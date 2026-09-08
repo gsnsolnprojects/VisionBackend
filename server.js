@@ -12,6 +12,8 @@ const aiRoutes = require('./routes/ai');
 const dashboardRoutes = require('./routes/dashboard');
 const analyticsRoutes = require('./routes/analytics');
 const auditRoutes = require('./routes/audit');
+const actionRoutes = require('./routes/actions');
+const projectRoutes = require('./routes/projects');
 const demoExtinguisherRoutes = require('./routes/demoExtinguisherRoutes');
 const { authenticateToken } = require('./middleware/authMiddleware');
 const dns = require('dns');
@@ -124,6 +126,15 @@ app.use('/api/analytics', analyticsRoutes);
 // ✅ Register audit routes
 // All routes in routes/audit.js will be prefixed with /api/audit
 app.use('/api/audit', auditRoutes);
+
+// ✅ Register action item routes (corrosion dashboard: open actions/overdue reviews)
+// All routes in routes/actions.js will be prefixed with /api/actions
+app.use('/api/actions', actionRoutes);
+
+// ✅ Register project routes (keeps Mongo's company/project-scoped
+// collections in sync with a project's name after a rename in Supabase)
+// All routes in routes/projects.js will be prefixed with /api/projects
+app.use('/api/projects', projectRoutes);
 
 // ✅ Register temporary extinguisher OCR demo routes
 // All routes in routes/demoExtinguisherRoutes.js will be prefixed with /api/demo/extinguisher

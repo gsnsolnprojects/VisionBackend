@@ -4,6 +4,7 @@ const Model = require('../models/Model');
 const { validateWorkspaceAccess, canAccessAllWorkspaces } = require('../utils/workspaceScoping');
 const { getClassNamesForTrainedModel } = require('../services/yoloClassNamesService');
 const { classNamesFromMetadata, stampClassIds } = require('../utils/classLegend');
+const { deriveSeverityFromPercent } = require('../utils/severity');
 
 function readMetadata(job) {
   const metadataPath = job.results?.metadataPath;
@@ -120,15 +121,25 @@ function buildSurveyFromJobs(surveyName, jobs, classNames = []) {
       const visits = byPart[regionName].sort(
         (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       );
-      const latestCompleted = visits.find((v) => v.status === 'completed' && v.meanCorrosionPercent != null);
+      const completedVisits = visits.filter((v) => v.status === 'completed' && v.meanCorrosionPercent != null);
+      const latestCompleted = completedVisits[0] || null;
+      const previousCompleted = completedVisits[1] || null;
+      const meanCorrosionPercent = latestCompleted ? latestCompleted.meanCorrosionPercent : null;
       return {
         regionName,
         visitCount: visits.length,
         latest: visits[0],
         latestCompleted: latestCompleted || null,
-        meanCorrosionPercent: latestCompleted ? latestCompleted.meanCorrosionPercent : null,
+        meanCorrosionPercent,
         imageCount: latestCompleted ? latestCompleted.imageCount : 0,
         byClass: latestCompleted?.byClass || [],
+        severityBand: deriveSeverityFromPercent(meanCorrosionPercent),
+        changeFromPrevious: previousCompleted
+          ? {
+              delta: round4(meanCorrosionPercent - previousCompleted.meanCorrosionPercent),
+              previousMeanCorrosionPercent: previousCompleted.meanCorrosionPercent,
+            }
+          : null,
         visits,
       };
     });
@@ -249,4 +260,10 @@ const getMobileInspectSurvey = async (req, res) => {
 module.exports = {
   listMobileInspectSurveys,
   getMobileInspectSurvey,
+  // Exported for reuse by the PDF export controller, so survey aggregation
+  // logic lives in exactly one place.
+  buildSurveyFromJobs,
+  inspectFilter,
+  resolveClassNamesForJobs,
+  readMetadata,
 };

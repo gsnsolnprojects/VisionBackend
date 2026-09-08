@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const storageAdapter = require('../services/storageAdapter');
 const onnxConverter = require('../services/onnxConverter');
+const tfliteConverter = require('../services/tfliteConverter');
 const { getClassNamesForTrainedModel } = require('../services/yoloClassNamesService');
 const { hydrateAndPersistModelMetrics } = require('../utils/yoloTrainingMetrics');
 
@@ -339,7 +340,7 @@ const getModelInsights = async (req, res) => {
 const getModelDownloadUrl = async (req, res) => {
   try {
     const { modelId } = req.params;
-    const { format = 'pt' } = req.query;
+    const { format = 'pt', variant = 'float16' } = req.query;
 
     if (!modelId) {
       return res.status(400).json({
@@ -360,7 +361,7 @@ const getModelDownloadUrl = async (req, res) => {
     // ✅ Determine file path based on format
     let filePath;
     let filename;
-    
+
     if (format === 'pt') {
       filePath = model.bestCheckpointPath || path.join(model.storagePath, 'best.pt');
       filename = `model_${model.modelVersion}.pt`;
@@ -368,6 +369,17 @@ const getModelDownloadUrl = async (req, res) => {
       // Check if ONNX export exists
       filePath = path.join(model.storagePath, 'best.onnx');
       filename = `model_${model.modelVersion}.onnx`;
+    } else if (format === 'tflite') {
+      if (!tfliteConverter.TFLITE_VARIANTS.includes(variant)) {
+        return res.status(400).json({
+          error: 'Invalid variant',
+          message: `variant must be one of: ${tfliteConverter.TFLITE_VARIANTS.join(', ')}`,
+          provided: variant
+        });
+      }
+      // On-device inference (mobile app) needs TFLite — bundled or downloaded.
+      filePath = tfliteConverter.tflitePath(model, variant);
+      filename = `model_${model.modelVersion}_${variant}.tflite`;
     } else if (format === 'zip') {
       // Create zip path (if exists)
       filePath = path.join(model.storagePath, 'model.zip');
@@ -375,7 +387,7 @@ const getModelDownloadUrl = async (req, res) => {
     } else {
       return res.status(400).json({
         error: 'Invalid format',
-        message: `Format must be 'pt', 'onnx', or 'zip'`,
+        message: `Format must be 'pt', 'onnx', 'tflite', or 'zip'`,
         provided: format
       });
     }
@@ -383,9 +395,9 @@ const getModelDownloadUrl = async (req, res) => {
     // ✅ For ONNX format, convert if file doesn't exist
     if (format === 'onnx' && !fs.existsSync(filePath)) {
       console.log(`🔄 ONNX file not found, converting from PyTorch model...`);
-      
+
       const conversionResult = await onnxConverter.getOrCreateOnnx(model);
-      
+
       if (!conversionResult.success) {
         return res.status(500).json({
           error: 'ONNX conversion failed',
@@ -393,11 +405,28 @@ const getModelDownloadUrl = async (req, res) => {
           modelId: modelId
         });
       }
-      
+
       // Update filePath to the converted file
       filePath = conversionResult.path;
     }
-    
+
+    // ✅ For TFLite format, convert if the requested variant doesn't exist
+    if (format === 'tflite' && !fs.existsSync(filePath)) {
+      console.log(`🔄 TFLite (${variant}) not found, converting from PyTorch model...`);
+
+      const conversionResult = await tfliteConverter.getOrCreateTflite(model, variant);
+
+      if (!conversionResult.success) {
+        return res.status(500).json({
+          error: 'TFLite conversion failed',
+          message: conversionResult.error || 'Failed to convert model to TFLite format',
+          modelId: modelId
+        });
+      }
+
+      filePath = conversionResult.path;
+    }
+
     // ✅ Check if file exists
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({
@@ -415,7 +444,9 @@ const getModelDownloadUrl = async (req, res) => {
     // ✅ Generate download URL (for local storage, use direct API endpoint)
     // In production with cloud storage, this would be a signed URL
     const baseUrl = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
-    const downloadUrl = `${baseUrl}/api/models/${modelId}/download?format=${format}`;
+    const downloadUrl = format === 'tflite'
+      ? `${baseUrl}/api/models/${modelId}/download?format=${format}&variant=${variant}`
+      : `${baseUrl}/api/models/${modelId}/download?format=${format}`;
 
     // ✅ Set expiration (1 hour from now)
     const expiresAt = new Date(Date.now() + 3600000); // 1 hour
@@ -423,7 +454,8 @@ const getModelDownloadUrl = async (req, res) => {
     return res.status(200).json({
       downloadUrl: downloadUrl,
       expiresAt: expiresAt.toISOString(),
-      fileSize: fileSize
+      fileSize: fileSize,
+      ...(format === 'tflite' ? { variant } : {})
     });
 
   } catch (error) {
@@ -437,16 +469,17 @@ const getModelDownloadUrl = async (req, res) => {
 
 /**
  * GET /api/models/:modelId/download
- * 
- * Download the model file in specified format (pt, onnx, or zip)
- * 
+ *
+ * Download the model file in specified format (pt, onnx, tflite, or zip)
+ *
  * Query params:
- * - format (optional): File format - 'pt', 'onnx', or 'zip' (default: 'pt')
+ * - format (optional): File format - 'pt', 'onnx', 'tflite', or 'zip' (default: 'pt')
+ * - variant (optional, tflite only): 'float16' or 'float32' (default: 'float16')
  */
 const downloadModel = async (req, res) => {
   try {
     const { modelId } = req.params;
-    const { format = 'pt' } = req.query;
+    const { format = 'pt', variant = 'float16' } = req.query;
 
     if (!modelId) {
       return res.status(400).json({
@@ -467,20 +500,20 @@ const downloadModel = async (req, res) => {
     // ✅ Determine file path based on format
     let filePath;
     let filename;
-    
+
     if (format === 'pt') {
       filePath = model.bestCheckpointPath || path.join(model.storagePath, 'best.pt');
       filename = `model_${model.modelVersion}.pt`;
     } else if (format === 'onnx') {
       filePath = path.join(model.storagePath, 'best.onnx');
       filename = `model_${model.modelVersion}.onnx`;
-      
+
       // ✅ Convert to ONNX if file doesn't exist
       if (!fs.existsSync(filePath)) {
         console.log(`🔄 ONNX file not found, converting from PyTorch model...`);
-        
+
         const conversionResult = await onnxConverter.getOrCreateOnnx(model);
-        
+
         if (!conversionResult.success) {
           return res.status(500).json({
             error: 'ONNX conversion failed',
@@ -488,8 +521,35 @@ const downloadModel = async (req, res) => {
             modelId: modelId
           });
         }
-        
+
         // Update filePath to the converted file
+        filePath = conversionResult.path;
+      }
+    } else if (format === 'tflite') {
+      if (!tfliteConverter.TFLITE_VARIANTS.includes(variant)) {
+        return res.status(400).json({
+          error: 'Invalid variant',
+          message: `variant must be one of: ${tfliteConverter.TFLITE_VARIANTS.join(', ')}`,
+          provided: variant
+        });
+      }
+      filePath = tfliteConverter.tflitePath(model, variant);
+      filename = `model_${model.modelVersion}_${variant}.tflite`;
+
+      // ✅ Convert to TFLite if the requested variant doesn't exist
+      if (!fs.existsSync(filePath)) {
+        console.log(`🔄 TFLite (${variant}) not found, converting from PyTorch model...`);
+
+        const conversionResult = await tfliteConverter.getOrCreateTflite(model, variant);
+
+        if (!conversionResult.success) {
+          return res.status(500).json({
+            error: 'TFLite conversion failed',
+            message: conversionResult.error || 'Failed to convert model to TFLite format',
+            modelId: modelId
+          });
+        }
+
         filePath = conversionResult.path;
       }
     } else if (format === 'zip') {
@@ -498,11 +558,11 @@ const downloadModel = async (req, res) => {
     } else {
       return res.status(400).json({
         error: 'Invalid format',
-        message: `Format must be 'pt', 'onnx', or 'zip'`,
+        message: `Format must be 'pt', 'onnx', 'tflite', or 'zip'`,
         provided: format
       });
     }
-    
+
     // ✅ Check if file exists
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({

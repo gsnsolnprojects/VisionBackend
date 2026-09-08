@@ -14,6 +14,7 @@ const {
   listMobileInspectSurveys,
   getMobileInspectSurvey,
 } = require('../controllers/mobileInspectSurveyController');
+const { exportSurveyPdf } = require('../controllers/pdfExportController');
 
 const inferenceTempDir = path.join(process.cwd(), 'uploads', 'inference-temp');
 if (!fs.existsSync(inferenceTempDir)) {
@@ -70,6 +71,12 @@ router.get(
   '/survey',
   requirePermissionOr(['viewModels', 'runInference', 'viewInferenceResults']),
   getMobileInspectSurvey
+);
+
+router.get(
+  '/survey/pdf',
+  requirePermissionOr(['viewModels', 'runInference', 'viewInferenceResults']),
+  exportSurveyPdf
 );
 
 router.post(

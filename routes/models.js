@@ -51,9 +51,12 @@ router.get('/:modelId/metrics', authenticateToken, requirePermission('viewTraini
 router.get('/:modelId/insights', authenticateToken, requirePermission('viewTrainingMetrics'), getModelInsights);
 
 // GET /api/models/:modelId/download-url - Get signed download URL
+// format=pt|onnx|tflite|zip, variant=float16|float32 (tflite only, default float16)
 router.get('/:modelId/download-url', authenticateToken, requirePermission('viewModels'), getModelDownloadUrl);
 
 // GET /api/models/:modelId/download - Download model file
+// format=pt|onnx|tflite|zip, variant=float16|float32 (tflite only, default float16)
+// tflite is converted on-demand from the .pt checkpoint on first request, then cached on disk.
 router.get('/:modelId/download', authenticateToken, requirePermission('viewModels'), downloadModel);
 
 // GET /api/models/:modelId/checkpoints - List all checkpoints

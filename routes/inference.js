@@ -16,6 +16,7 @@ const {
   getAnnotatedImage,
   cancelInference,
   deleteInference,
+  deleteInferenceImage,
   listInferenceJobs,
   listAvailableModels,
   listDatasetsWithTestFolders,
@@ -107,6 +108,15 @@ router.get('/:inferenceId/results', authenticateToken, requirePermission('viewIn
 
 // GET /api/inference/:inferenceId/image/:filename - Get annotated image/video
 router.get('/:inferenceId/image/:filename', authenticateToken, requirePermission('viewInferenceResults'), getAnnotatedImage);
+
+// DELETE /api/inference/:inferenceId/image/:filename - Remove one image from a job's results
+// and recompute job-level aggregates. Same permission model as deleting the whole job.
+router.delete(
+  '/:inferenceId/image/:filename',
+  authenticateToken,
+  requirePermissionOr(['deleteProjects', 'deleteOwnInference']),
+  deleteInferenceImage
+);
 
 // POST /api/inference/:inferenceId/cancel - Cancel a running inference job
 router.post('/:inferenceId/cancel', authenticateToken, requirePermission('runInference'), cancelInference);
