@@ -9,10 +9,14 @@ const {
   getMobileInspectConfig,
   putMobileInspectConfig,
 } = require('../controllers/mobileInspectController');
-const { startMobileInspect } = require('../controllers/mobileInspectStartController');
+const { startMobileInspect, confirmOnDeviceInspect } = require('../controllers/mobileInspectStartController');
 const {
   listMobileInspectSurveys,
   getMobileInspectSurvey,
+  compareWithBaseline,
+  setVisitReview,
+  getLatestForRegion,
+  listObservations,
 } = require('../controllers/mobileInspectSurveyController');
 const { exportSurveyPdf } = require('../controllers/pdfExportController');
 
@@ -79,11 +83,47 @@ router.get(
   exportSurveyPdf
 );
 
+// GET /api/mobile-inspect/compare?currentInferenceId= - side-by-side baseline
+// photo comparison for a resurvey job.
+router.get(
+  '/compare',
+  requirePermissionOr(['viewModels', 'runInference', 'viewInferenceResults']),
+  compareWithBaseline
+);
+
+// PUT /api/mobile-inspect/review/:inferenceId - reviewer's verdict (worse / same / better) on a visit
+router.put('/review/:inferenceId', requirePermissionOr(['approveActions']), setVisitReview);
+
+// GET /api/mobile-inspect/observations?company=&project= - every spot on the
+// vessel with its inspection history (dashboard "Observations" register).
+router.get(
+  '/observations',
+  requirePermissionOr(['viewModels', 'runInference', 'viewInferenceResults']),
+  listObservations
+);
+
+// GET /api/mobile-inspect/region-history?company=&project=&regionName=&excludeSurveyName=
+// - most recent completed job for a region, powers the mobile "resurvey instead?" suggestion.
+router.get(
+  '/region-history',
+  requirePermissionOr(['viewModels', 'runInference', 'viewInferenceResults']),
+  getLatestForRegion
+);
+
 router.post(
   '/',
   requirePermission('runInference'),
   uploadInspectImages.array('files', 50),
   startMobileInspect
+);
+
+// POST /api/mobile-inspect/confirm-on-device - confirm an on-device preview
+// into a real survey part without re-running server-side inference.
+router.post(
+  '/confirm-on-device',
+  requirePermission('runInference'),
+  uploadInspectImages.array('files', 50),
+  confirmOnDeviceInspect
 );
 
 module.exports = router;

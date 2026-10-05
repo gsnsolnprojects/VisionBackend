@@ -273,6 +273,7 @@ const processAugmentationJob = async (job) => {
     valTestMultiplier,
     targetSize,
     augmentationMultiplier,
+    imageIds,
   } = job.data || {};
 
   console.log('[AUGMENT-WORKER] Processing augmentation job', {
@@ -388,6 +389,8 @@ const processAugmentationJob = async (job) => {
       labelSource,
       labels: Array.isArray(originalDataset.labels) ? originalDataset.labels : [],
       backupDatasetId: originalDataset._id,
+      parentDatasetId: originalDataset._id,
+      rootDatasetId: originalDataset.rootDatasetId || originalDataset._id,
       augmentationMultiplier: augmentationMultiplier || null,
       augmentedFromVersion: originalDataset.version,
       isActive: false, // Will be set to true after successful augmentation
@@ -454,7 +457,30 @@ const processAugmentationJob = async (job) => {
       sourceVersion: originalDataset.version,
     });
 
-    // ---------- 2. Temp dirs: input pool (all images) and output pool (Python writes augmented here) ----------
+    // ---------- 1.5 Optional scoping: augment only a subset of images ----------
+    // When imageIds is set (e.g. a newly added-and-labeled batch), only those images go
+    // through Python augmentation; the rest of the source dataset passes through to the
+    // new version unchanged. Resolve imageIds -> filenames since the pool above is keyed
+    // by storedName, not Mongo _id.
+    let scopedPool = pool;
+    let passthroughPool = [];
+    if (Array.isArray(imageIds) && imageIds.length > 0) {
+      const scopedImages = await Image.find({ _id: { $in: imageIds }, datasetId: originalDataset._id })
+        .select('filename')
+        .lean();
+      const scopedNames = new Set(scopedImages.map((img) => String(img.filename).toLowerCase()));
+      scopedPool = pool.filter((p) => scopedNames.has(p.storedName.toLowerCase()));
+      passthroughPool = pool.filter((p) => !scopedNames.has(p.storedName.toLowerCase()));
+      if (scopedPool.length === 0) {
+        throw new Error('None of the selected images have labels yet. Label them first, then try augmenting again.');
+      }
+      console.log('[AUGMENT-WORKER] Scoped augmentation to a subset of images', {
+        scoped: scopedPool.length,
+        passthrough: passthroughPool.length,
+      });
+    }
+
+    // ---------- 2. Temp dirs: input pool (scoped images) and output pool (Python writes augmented here) ----------
     const inputPoolRoot = path.join(outputRoot, '_input_pool');
     const outputPoolRoot = path.join(outputRoot, '_output_pool');
     const poolImagesDir = path.join(inputPoolRoot, 'images', 'train');
@@ -462,7 +488,7 @@ const processAugmentationJob = async (job) => {
     await storageAdapter.ensureDir(poolImagesDir);
     await storageAdapter.ensureDir(poolLabelsDir);
 
-    for (const item of pool) {
+    for (const item of scopedPool) {
       const destImage = path.join(poolImagesDir, item.storedName);
       const destLabel = path.join(poolLabelsDir, path.parse(item.storedName).name + '.txt');
       if (path.resolve(item.sourcePath) !== path.resolve(destImage)) {
@@ -473,29 +499,30 @@ const processAugmentationJob = async (job) => {
       }
     }
 
-    // ---------- 3. Augmentation parameters: desired FINAL image count ----------
-    // targetTrainTotal from the UI = "number of images after augmentation"
+    // ---------- 3. Augmentation parameters: desired FINAL image count (for the scoped pool) ----------
+    // targetTrainTotal from the UI = "number of images after augmentation" — when scoped,
+    // this means "final count for just the scoped subset", not the whole dataset.
     let desiredTotal =
       typeof targetTrainTotal === 'number' && targetTrainTotal > 0
         ? targetTrainTotal
         : 0;
     if (augmentationMultiplier && !desiredTotal) {
       desiredTotal = Math.max(
-        pool.length,
-        Math.round(pool.length * augmentationMultiplier),
+        scopedPool.length,
+        Math.round(scopedPool.length * augmentationMultiplier),
       );
     }
     if (!desiredTotal) {
-      desiredTotal = Math.max(pool.length * 2, 100);
+      desiredTotal = Math.max(scopedPool.length * 2, 100);
     }
     // Never ask for fewer images than we already have
-    desiredTotal = Math.max(desiredTotal, pool.length);
+    desiredTotal = Math.max(desiredTotal, scopedPool.length);
 
     // Python generates additional variants; aim so originals + augs ≈ desiredTotal
-    const additionalNeeded = Math.max(0, desiredTotal - pool.length);
+    const additionalNeeded = Math.max(0, desiredTotal - scopedPool.length);
     // Ask Python for at least `additionalNeeded` variants (it creates ceil(target/n)*n files)
     const effectiveTargetTrainTotal =
-      additionalNeeded > 0 ? Math.max(additionalNeeded, pool.length) : pool.length;
+      additionalNeeded > 0 ? Math.max(additionalNeeded, scopedPool.length) : scopedPool.length;
 
     const effectiveValTestMultiplier =
       typeof valTestMultiplier === 'number' && valTestMultiplier > 0 ? valTestMultiplier : 2;
@@ -536,15 +563,21 @@ const processAugmentationJob = async (job) => {
       }
     }
 
-    // ---------- 4. Combined list: originals + augmented (cap at desiredTotal) ----------
-    const combinedList = pool.map((p) => ({ ...p }));
+    // ---------- 4. Combined list: passthrough (unchanged) + scoped originals + augmented ----------
+    // (augmented-variant cap is against the SCOPED portion only — desiredTotal means "final
+    // count for the scoped subset", so passthrough images must never count against it)
+    const combinedList = [
+      ...passthroughPool.map((p) => ({ ...p })),
+      ...scopedPool.map((p) => ({ ...p })),
+    ];
     const combinedNames = new Set(combinedList.map((p) => p.storedName.toLowerCase()));
+    let scopedCount = scopedPool.length;
 
     try {
       const augImagesDir = path.join(outputPoolRoot, 'images', 'train');
       const augEntries = await fs.readdir(augImagesDir, { withFileTypes: true });
       for (const entry of augEntries) {
-        if (combinedList.length >= desiredTotal) break;
+        if (scopedCount >= desiredTotal) break;
         if (!entry.isFile()) continue;
         const storedName = entry.name;
         const nameKey = storedName.toLowerCase();
@@ -562,6 +595,7 @@ const processAugmentationJob = async (job) => {
           sourcePath: path.join(outputPoolRoot, storedPath),
           labelPath: fullLabelPath,
         });
+        scopedCount += 1;
       }
     } catch {
       // No augmented images dir

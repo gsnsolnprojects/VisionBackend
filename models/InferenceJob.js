@@ -10,6 +10,29 @@ const mongoose = require('mongoose');
  * - Results metadata (detections, confidence scores, annotated images)
  * - Error information if inference fails
  */
+const assessmentSchema = new mongoose.Schema(
+  {
+    severity: { type: String, enum: ['low', 'medium', 'high', 'critical'], default: null },
+    damageTags: { type: [String], default: [] },
+    assessedBy: { type: String, default: null },
+    assessedAt: { type: Date, default: null }
+  },
+  { _id: false }
+);
+
+// A reviewer's verdict on how this visit compares with an earlier one ("confirmed
+// deterioration" etc.), set from the web dashboard.
+const reviewSchema = new mongoose.Schema(
+  {
+    verdict: { type: String, enum: ['worse', 'same', 'better'], required: true },
+    note: { type: String, default: '' },
+    reviewedBy: { type: String, default: null },
+    reviewedAt: { type: Date, default: null },
+    comparedToInferenceId: { type: String, default: null }
+  },
+  { _id: false }
+);
+
 const inferenceJobSchema = new mongoose.Schema({
   // Unique inference job identifier
   inferenceId: {
@@ -51,11 +74,76 @@ const inferenceJobSchema = new mongoose.Schema({
     default: null
   },
 
+  // The specific spot this job inspected (area + optional component), minted
+  // automatically as OBS-#### — see models/Observation.js. Null on jobs from
+  // before observations existed until the backfill script assigns one.
+  observationId: {
+    type: String,
+    default: null,
+    index: true
+  },
+  componentName: {
+    type: String,
+    default: ''
+  },
+  // Set automatically when a spot that has been inspected before is captured
+  // again: the most recent earlier completed visit of the same observation.
+  // Lets any visit be compared with the one before it, resurvey or not.
+  previousInferenceId: {
+    type: String,
+    default: null,
+    index: true
+  },
+  // Reviewer's verdict on this visit vs an earlier one (null until reviewed).
+  review: {
+    type: reviewSchema,
+    default: null
+  },
+  // The inspector's confirmed assessment of this part — severity they signed
+  // off on (the AI's corrosion-% band is only a suggestion) and the coating
+  // damage types they saw. Null until an inspector confirms one.
+  assessment: {
+    type: assessmentSchema,
+    default: null
+  },
+  // Free-text note the inspector typed at capture time.
+  notes: {
+    type: String,
+    default: ''
+  },
+  // Email of the inspector who captured it (createdBy holds their user id).
+  inspectorName: {
+    type: String,
+    default: null
+  },
+
   // Groups many region inspects into one ship/visit survey
   surveyName: {
     type: String,
     default: null,
     index: true
+  },
+
+  // Set when this job is an explicit "resurvey" of a specific earlier job for
+  // the same regionName (possibly in a different survey, weeks/months later)
+  // — powers the dashboard's baseline photo comparison. Null for a normal,
+  // first-time inspection.
+  baselineInferenceId: {
+    type: String,
+    default: null,
+    index: true
+  },
+
+  // Which of THIS job's own photos (by filename) correspond to which photo
+  // on the baseline job, set once by the client at upload time for both the
+  // server and on-device submission paths identically — a photo present here
+  // with no matchedBaselineFilename, or simply absent, is a new/extra photo
+  // not present in the baseline. Matching against the baseline's actual
+  // stored filenames is done by basename-without-extension (see
+  // compareWithBaseline) to tolerate any format conversion during upload.
+  photoMatches: {
+    type: [{ filename: String, matchedBaselineFilename: String }],
+    default: []
   },
 
   // Source type: 'test_folder', 'custom_folder', or 'live_camera'
@@ -184,6 +272,23 @@ const inferenceJobSchema = new mongoose.Schema({
   // Error information (if inference fails)
   error: {
     type: String
+  },
+
+  // Explicit human confirmation that this part's results should count as
+  // part of the survey, set from the mobile app's Results screen. The part
+  // is already visible in the survey the moment photos are uploaded — this
+  // is a review acknowledgment, not a gate on that visibility.
+  confirmed: {
+    type: Boolean,
+    default: false
+  },
+  confirmedAt: {
+    type: Date,
+    default: null
+  },
+  confirmedBy: {
+    type: String, // User ID from X-User-Id header
+    default: null
   },
 
   // Timestamps

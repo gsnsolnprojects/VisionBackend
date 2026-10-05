@@ -74,6 +74,14 @@ const imageSchema = new mongoose.Schema({
   // Conversion metadata
   convertedAt: {
     type: Date // Timestamp of last YOLO conversion
+  },
+
+  // Groups images added together via the "Add Photos" flow (controllers/datasetController.js
+  // addDatasetFiles), so the app can later offer to label/augment just that batch.
+  batchId: {
+    type: String,
+    default: null,
+    index: true
   }
 }, {
   timestamps: true // Automatically adds createdAt and updatedAt

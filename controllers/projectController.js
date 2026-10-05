@@ -4,6 +4,8 @@ const Model = require('../models/Model');
 const MobileInspectConfig = require('../models/MobileInspectConfig');
 const Dataset = require('../models/Dataset');
 const TrainingJob = require('../models/TrainingJob');
+const Observation = require('../models/Observation');
+const ObservationCounter = require('../models/ObservationCounter');
 const { validateWorkspaceAccess, canAccessAllWorkspaces } = require('../utils/workspaceScoping');
 const auditService = require('../services/auditService');
 
@@ -24,6 +26,7 @@ const RENAME_TARGETS = [
   { label: 'models', Model: Model },
   { label: 'datasets', Model: Dataset },
   { label: 'trainingJobs', Model: TrainingJob },
+  { label: 'observations', Model: Observation },
 ];
 
 /**
@@ -85,6 +88,19 @@ const renameProject = async (req, res) => {
     } catch (configErr) {
       collections.mobileInspectConfig = 0;
       collections.mobileInspectConfigError = configErr.message;
+    }
+
+    // ObservationCounter also has a UNIQUE index on {company, project} — same
+    // reasoning as MobileInspectConfig above.
+    try {
+      const counterResult = await ObservationCounter.updateOne(
+        { company, project: oldProjectName },
+        { $set: { project: newProjectName } }
+      );
+      collections.observationCounters = counterResult.modifiedCount;
+    } catch (counterErr) {
+      collections.observationCounters = 0;
+      collections.observationCountersError = counterErr.message;
     }
 
     auditService.logAction({

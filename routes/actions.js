@@ -1,5 +1,8 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const { authenticateToken } = require('../middleware/authMiddleware');
 const { requirePermission, requirePermissionOr } = require('../middleware/authorizationMiddleware');
 const {
@@ -8,7 +11,33 @@ const {
   createActionItem,
   updateActionItem,
   deleteActionItem,
+  uploadAfterPhoto,
+  getActionPhoto,
 } = require('../controllers/actionItemController');
+
+// Photos land directly under uploads/action-items/<actionId>/ — no temp+move
+// step needed since (unlike inference results) there's no processing step
+// in between upload and serving.
+const actionItemsDir = path.join(process.cwd(), 'uploads', 'action-items');
+const uploadAfterPhotoStorage = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const dir = path.join(actionItemsDir, req.params.actionId);
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname) || '.jpg';
+      cb(null, `after_${Date.now()}${ext}`);
+    },
+  }),
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (['.jpg', '.jpeg', '.png'].includes(ext)) cb(null, true);
+    else cb(new Error(`Invalid file type: ${ext}. Only .jpg, .jpeg, .png are allowed.`), false);
+  },
+  limits: { fileSize: 20 * 1024 * 1024 },
+});
 
 /**
  * Action Item Routes
@@ -31,5 +60,22 @@ router.patch('/:actionId', authenticateToken, requirePermissionOr(['manageAction
 
 // DELETE /api/actions/:actionId - Delete an action item
 router.delete('/:actionId', authenticateToken, requirePermission('manageActions'), deleteActionItem);
+
+// POST /api/actions/:actionId/after-photo - Attach an after-repair photo
+router.post(
+  '/:actionId/after-photo',
+  authenticateToken,
+  requirePermissionOr(['manageActions', 'approveActions']),
+  uploadAfterPhotoStorage.single('file'),
+  uploadAfterPhoto
+);
+
+// GET /api/actions/:actionId/photo/:filename - Serve an after-repair photo
+router.get(
+  '/:actionId/photo/:filename',
+  authenticateToken,
+  requirePermissionOr(['viewActions', 'manageActions', 'approveActions']),
+  getActionPhoto
+);
 
 module.exports = router;

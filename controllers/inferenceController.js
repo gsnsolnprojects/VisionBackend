@@ -14,6 +14,7 @@ const storageAdapter = require('../services/storageAdapter');
 const auditService = require('../services/auditService');
 const { buildWorkspaceFilter, validateWorkspaceAccess, canAccessAllWorkspaces } = require('../utils/workspaceScoping');
 const { resolveInferenceImagePath } = require('../utils/resolveInferenceImagePath');
+const { normalizeAssessment } = require('../utils/assessment');
 const fs = require('fs');
 const fsPromises = require('fs').promises;
 const path = require('path');
@@ -1245,7 +1246,10 @@ const getInferenceResults = async (req, res) => {
         },
         metadata: metadata
       },
-      completedAt: inferenceJob.completedAt
+      completedAt: inferenceJob.completedAt,
+      confirmed: inferenceJob.confirmed || false,
+      confirmedAt: inferenceJob.confirmedAt || null,
+      assessment: inferenceJob.assessment || null
     };
 
     return res.status(200).json(response);
@@ -1425,8 +1429,170 @@ const cancelInference = async (req, res) => {
 };
 
 /**
+ * POST /api/inference/:inferenceId/confirm
+ *
+ * Marks a completed inference job as human-reviewed. The job is already
+ * visible in its survey from the moment photos were uploaded — this is a
+ * review acknowledgment recorded for the audit trail, not a gate on that
+ * visibility. (POST, not PATCH: React Native's networking layer on Android
+ * has a known history of unreliable PATCH support.)
+ */
+/**
+ * PUT /api/inference/:inferenceId/assessment
+ * Body: { severity?: 'low'|'medium'|'high'|'critical', damageTags?: string[] }
+ *
+ * Saves (or changes) the inspector's assessment of an already-saved part —
+ * severity they confirm plus the coating damage types they see.
+ */
+const setInferenceAssessment = async (req, res) => {
+  try {
+    const { inferenceId } = req.params;
+    const inferenceJob = await InferenceJob.findOne({ inferenceId });
+    if (!inferenceJob) {
+      return res.status(404).json({ error: 'Inference job not found', inferenceId });
+    }
+    if (!canAccessAllWorkspaces(req.user)) {
+      const accessValidation = validateWorkspaceAccess(req.user, inferenceJob.company);
+      if (!accessValidation.allowed) {
+        return res.status(403).json({
+          error: 'Permission denied',
+          message: accessValidation.error || 'You do not have access to this inference job'
+        });
+      }
+    }
+    if (inferenceJob.status !== 'completed') {
+      return res.status(400).json({ error: 'Cannot assess a job that is not completed', status: inferenceJob.status });
+    }
+
+    let assessment;
+    try {
+      assessment = normalizeAssessment(req.body);
+    } catch (validationError) {
+      return res.status(400).json({ error: 'Invalid assessment', message: validationError.message });
+    }
+    if (!assessment) {
+      return res.status(400).json({ error: 'Nothing to save', message: 'Provide a severity and/or damage types.' });
+    }
+
+    inferenceJob.assessment = {
+      ...assessment,
+      assessedBy: req.user?.email || null,
+      assessedAt: new Date()
+    };
+    await inferenceJob.save();
+
+    auditService.logAction({
+      action: 'update',
+      resourceType: 'inference',
+      resourceId: inferenceJob.inferenceId,
+      details: {
+        company: inferenceJob.company,
+        project: inferenceJob.project,
+        surveyName: inferenceJob.surveyName,
+        regionName: inferenceJob.regionName,
+        assessment
+      },
+      req
+    });
+
+    return res.status(200).json({ inferenceId: inferenceJob.inferenceId, assessment: inferenceJob.assessment });
+  } catch (error) {
+    console.error('Error saving inference assessment:', error);
+    return res.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+};
+
+const confirmInferenceJob = async (req, res) => {
+  try {
+    const { inferenceId } = req.params;
+
+    if (!inferenceId) {
+      return res.status(400).json({
+        error: 'Missing required parameter: inferenceId'
+      });
+    }
+
+    const inferenceJob = await InferenceJob.findOne({ inferenceId });
+
+    if (!inferenceJob) {
+      return res.status(404).json({
+        error: 'Inference job not found',
+        inferenceId: inferenceId
+      });
+    }
+
+    if (!canAccessAllWorkspaces(req.user)) {
+      const accessValidation = validateWorkspaceAccess(req.user, inferenceJob.company);
+      if (!accessValidation.allowed) {
+        return res.status(403).json({
+          error: 'Permission denied',
+          message: accessValidation.error || 'You do not have access to this inference job'
+        });
+      }
+    }
+
+    if (inferenceJob.status !== 'completed') {
+      return res.status(400).json({
+        error: 'Cannot confirm a job that is not completed',
+        status: inferenceJob.status
+      });
+    }
+
+    // Confirming can carry the inspector's assessment (severity + damage
+    // types) in the same call, so it's saved atomically with the sign-off.
+    let assessment = null;
+    try {
+      assessment = normalizeAssessment(req.body && req.body.assessment);
+    } catch (validationError) {
+      return res.status(400).json({ error: 'Invalid assessment', message: validationError.message });
+    }
+    if (assessment) {
+      inferenceJob.assessment = {
+        ...assessment,
+        assessedBy: req.user?.email || null,
+        assessedAt: new Date()
+      };
+    }
+
+    inferenceJob.confirmed = true;
+    inferenceJob.confirmedAt = new Date();
+    inferenceJob.confirmedBy = req.user ? req.user.id : null;
+    await inferenceJob.save();
+
+    auditService.logAction({
+      action: 'update',
+      resourceType: 'inference',
+      resourceId: inferenceJob.inferenceId,
+      details: {
+        company: inferenceJob.company,
+        project: inferenceJob.project,
+        surveyName: inferenceJob.surveyName,
+        regionName: inferenceJob.regionName,
+        confirmed: true,
+        ...(assessment ? { assessment } : {})
+      },
+      req
+    });
+
+    return res.status(200).json({
+      inferenceId: inferenceJob.inferenceId,
+      confirmed: inferenceJob.confirmed,
+      confirmedAt: inferenceJob.confirmedAt,
+      assessment: inferenceJob.assessment || null
+    });
+
+  } catch (error) {
+    console.error('Error confirming inference job:', error);
+    return res.status(500).json({
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+};
+
+/**
  * DELETE /api/inference/:inferenceId
- * 
+ *
  * Delete inference job and its results (files + MongoDB document)
  */
 const deleteInference = async (req, res) => {
@@ -1765,6 +1931,191 @@ const deleteInferenceImage = async (req, res) => {
 
   } catch (error) {
     console.error('Error deleting inference image:', error);
+    return res.status(500).json({
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+};
+
+/**
+ * POST /api/inference/:inferenceId/images
+ * multipart: files[] (already-annotated images), stats (JSON string:
+ * { classNames, images: [{filename, corrosionPercentTotal, byClass, instanceCount}] })
+ *
+ * Appends already-computed images (from the mobile app's on-device model) to
+ * an EXISTING completed job's results and recomputes the job's aggregates
+ * from the combined image set — the mirror image of deleteInferenceImage
+ * above. Used when a crew member realizes they missed a photo for a part
+ * that was already surveyed and wants to add it to that same survey entry
+ * rather than create a separate one.
+ */
+const addInferenceImages = async (req, res) => {
+  try {
+    const { inferenceId } = req.params;
+    const uploadedImages = Array.isArray(req.files) ? req.files : [];
+
+    if (!inferenceId) {
+      return res.status(400).json({ error: 'Missing required parameter: inferenceId' });
+    }
+    if (uploadedImages.length === 0) {
+      return res.status(400).json({ error: 'No files uploaded', message: 'At least one image is required.' });
+    }
+
+    const { checkPermission } = require('../utils/permissions');
+    const userRole = req.user ? req.user.role : null;
+    const userId = req.user ? req.user.id : null;
+
+    if (!userRole || !userId) {
+      return res.status(401).json({ error: 'Unauthorized', message: 'Authentication required' });
+    }
+
+    const hasDeleteProjects = checkPermission(userRole, 'deleteProjects');
+    const hasDeleteOwnInference = checkPermission(userRole, 'deleteOwnInference');
+
+    if (!hasDeleteProjects && !hasDeleteOwnInference) {
+      return res.status(403).json({
+        error: 'Permission denied',
+        message: 'You do not have permission to modify inference jobs'
+      });
+    }
+
+    const inferenceJob = await InferenceJob.findOne({ inferenceId });
+    if (!inferenceJob) {
+      return res.status(404).json({ error: 'Inference job not found', inferenceId });
+    }
+
+    if (!canAccessAllWorkspaces(req.user)) {
+      const accessValidation = validateWorkspaceAccess(req.user, inferenceJob.company);
+      if (!accessValidation.allowed) {
+        return res.status(403).json({
+          error: 'Permission denied',
+          message: accessValidation.error || 'You do not have access to this inference job'
+        });
+      }
+    }
+
+    if (!hasDeleteProjects && hasDeleteOwnInference) {
+      if (!inferenceJob.createdBy || inferenceJob.createdBy !== userId) {
+        return res.status(403).json({
+          error: 'Permission denied',
+          message: 'You can only modify your own inference jobs'
+        });
+      }
+    }
+
+    if (inferenceJob.status === 'running' || inferenceJob.status === 'queued') {
+      return res.status(400).json({
+        error: 'Cannot modify a job that is still processing',
+        status: inferenceJob.status
+      });
+    }
+
+    const metadataPath = inferenceJob.results && inferenceJob.results.metadataPath;
+    const annotatedImagesPath = inferenceJob.results && inferenceJob.results.annotatedImagesPath;
+    if (!metadataPath || !fs.existsSync(metadataPath) || !annotatedImagesPath) {
+      return res.status(404).json({ error: 'Results metadata not found for this job' });
+    }
+
+    let stats;
+    try {
+      stats = JSON.parse(req.body.stats || '{}');
+    } catch {
+      return res.status(400).json({ error: 'Invalid stats payload', message: 'stats must be valid JSON.' });
+    }
+    const statsByFilename = {};
+    for (const img of Array.isArray(stats.images) ? stats.images : []) {
+      if (img?.filename) statsByFilename[img.filename] = img;
+    }
+
+    const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+    if (!fs.existsSync(annotatedImagesPath)) {
+      await fs.promises.mkdir(annotatedImagesPath, { recursive: true });
+    }
+
+    const existingNames = new Set(
+      (metadata.images || []).map((f) => path.basename(String(f.filePath || '')))
+    );
+
+    const newEntries = [];
+    for (const file of uploadedImages) {
+      let destName = file.originalname;
+      if (existingNames.has(destName)) {
+        const ext = path.extname(destName);
+        const base = path.basename(destName, ext);
+        destName = `${base}_${Date.now()}${ext}`;
+      }
+      existingNames.add(destName);
+      const destPath = path.join(annotatedImagesPath, destName);
+      try {
+        await fs.promises.rename(file.path, destPath);
+      } catch {
+        await fs.promises.copyFile(file.path, destPath);
+        await fs.promises.unlink(file.path);
+      }
+      const s = statsByFilename[file.originalname] || {};
+      newEntries.push({
+        filePath: destName,
+        corrosionPercentTotal: typeof s.corrosionPercentTotal === 'number' ? s.corrosionPercentTotal : null,
+        byClass: Array.isArray(s.byClass) ? s.byClass : [],
+        instanceCount: typeof s.instanceCount === 'number' ? s.instanceCount : 0,
+      });
+    }
+
+    metadata.images = [...(metadata.images || []), ...newEntries];
+    metadata.files = [...(metadata.files || []), ...newEntries];
+    if (Array.isArray(stats.classNames) && stats.classNames.length > 0) {
+      metadata.classNames = stats.classNames;
+    }
+
+    const recomputed = recomputeAggregatesFromImages(metadata.images, metadata.classNames);
+    metadata.totalImages = metadata.images.length;
+    metadata.totalFiles = metadata.files.length;
+    metadata.totalDetections = recomputed.totalDetections;
+    metadata.averageConfidence = recomputed.averageConfidence;
+    metadata.detectionsByClass = recomputed.detectionsByClass;
+    metadata.corrosionStats = recomputed.corrosionStats;
+
+    // Write atomically so a crash mid-write can never leave a corrupt metadata.json.
+    const tmpPath = `${metadataPath}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(metadata, null, 2));
+    fs.renameSync(tmpPath, metadataPath);
+
+    inferenceJob.results.totalDetections = recomputed.totalDetections;
+    inferenceJob.results.averageConfidence = recomputed.averageConfidence;
+    inferenceJob.results.detectionsByClass = recomputed.detectionsByClass;
+    inferenceJob.results.corrosionStats = recomputed.corrosionStats;
+    for (const entry of newEntries) {
+      if ((entry.instanceCount || 0) > 0) {
+        inferenceJob.results.defectCount = (inferenceJob.results.defectCount || 0) + 1;
+      } else {
+        inferenceJob.results.goodCount = (inferenceJob.results.goodCount || 0) + 1;
+      }
+    }
+    if (inferenceJob.progress) {
+      inferenceJob.progress.totalImages = metadata.images.length;
+      inferenceJob.progress.processedImages = metadata.images.length;
+    }
+    inferenceJob.markModified('results');
+    inferenceJob.markModified('progress');
+    await inferenceJob.save();
+
+    await auditService.logAction({
+      action: 'update',
+      resourceType: 'inference',
+      resourceId: inferenceId,
+      details: { addedImages: newEntries.length, totalImages: metadata.images.length },
+      req,
+    });
+
+    return res.status(200).json({
+      inferenceId,
+      addedImages: newEntries.length,
+      totalImages: metadata.images.length,
+      corrosionStats: recomputed.corrosionStats,
+    });
+  } catch (error) {
+    console.error('Error adding inference images:', error);
     return res.status(500).json({
       error: 'Internal server error',
       message: error.message
@@ -2197,8 +2548,11 @@ module.exports = {
   getInferenceResults,
   getAnnotatedImage,
   cancelInference,
+  confirmInferenceJob,
+  setInferenceAssessment,
   deleteInference,
   deleteInferenceImage,
+  addInferenceImages,
   listInferenceJobs,
   listAvailableModels,
   listDatasetsWithTestFolders,

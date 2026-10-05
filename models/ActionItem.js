@@ -43,6 +43,17 @@ const actionItemSchema = new mongoose.Schema(
       default: null,
       index: true
     },
+    // The specific spot (area + component) this issue is about — see
+    // models/Observation.js. Null on issues raised before observations existed.
+    observationId: {
+      type: String,
+      default: null,
+      index: true
+    },
+    componentName: {
+      type: String,
+      default: ''
+    },
     inferenceId: {
       type: String,
       default: null,
@@ -78,6 +89,55 @@ const actionItemSchema = new mongoose.Schema(
       index: true
     },
 
+    // The reviewer's maintenance decision — distinct from `status`, which is
+    // this action's own approval workflow state, not what to actually do
+    // about the finding.
+    decision: {
+      type: String,
+      enum: ['monitor', 'inspect_further', 'repair', 'recoat', 'replace'],
+      default: null
+    },
+
+    // Coating-damage modes the reviewer visually confirmed on the photo(s) —
+    // independent from the AI's rust-severity detection.
+    damageTags: {
+      type: [String],
+      enum: ['peeling', 'cracking', 'blistering', 'exposed_metal'],
+      default: []
+    },
+
+    // Free-text reviewer commentary, separate from `description` (set once
+    // when the action is raised) — meant to accumulate as the action moves
+    // through review/approval.
+    reviewerNotes: {
+      type: String,
+      default: ''
+    },
+
+    // The technical/engineering recommendation for how to address the
+    // finding (e.g. coating type, procedure) — set when raising or
+    // reviewing, distinct from `decision` (the short maintenance category).
+    engineeringRecommendation: {
+      type: String,
+      default: ''
+    },
+
+    // What repair work was actually carried out in the field — set when the
+    // action is closed out (`status: 'completed'`), distinct from the
+    // recommendation above.
+    repairActionTaken: {
+      type: String,
+      default: ''
+    },
+
+    // Filenames of after-repair photos, stored under
+    // uploads/action-items/<actionId>/ — the "before" photo is just the
+    // finding's own inferenceId/filename, already on the action.
+    afterPhotos: {
+      type: [String],
+      default: []
+    },
+
     // "Overdue" is always computed from dueDate + status at read time,
     // never stored, so it can't go stale.
     dueDate: {
@@ -100,6 +160,13 @@ const actionItemSchema = new mongoose.Schema(
       default: null
     },
     approvedAt: {
+      type: Date,
+      default: null
+    },
+    // When this action was closed out (`status: 'completed'`) — distinct
+    // from `approvedAt`, which may have been stamped earlier at a separate
+    // "approved, proceed with repair" step.
+    completedAt: {
       type: Date,
       default: null
     },

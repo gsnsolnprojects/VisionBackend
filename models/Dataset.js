@@ -164,6 +164,21 @@ const datasetSchema = new mongoose.Schema({
     ref: 'Dataset',
     default: null
   },
+  // Lineage tracking for grouping related versions in the UI (augment AND duplicate chains).
+  // parentDatasetId: immediate source dataset this one was created from.
+  // rootDatasetId: shared by every dataset in a lineage tree, however deep — the grouping key.
+  parentDatasetId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Dataset',
+    default: null,
+    index: true
+  },
+  rootDatasetId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Dataset',
+    default: null,
+    index: true
+  },
   augmentationError: {
     type: String
   },
@@ -229,5 +244,7 @@ const datasetSchema = new mongoose.Schema({
 datasetSchema.index({ company: 1, project: 1, version: 1 });
 // ✅ Index for active dataset queries (used by file browser and training)
 datasetSchema.index({ company: 1, project: 1, isActive: 1 });
+// ✅ Index for grouping versions by lineage in the Versions panel
+datasetSchema.index({ company: 1, project: 1, rootDatasetId: 1 });
 
 module.exports = mongoose.model('Dataset', datasetSchema);

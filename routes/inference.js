@@ -15,8 +15,11 @@ const {
   getInferenceResults,
   getAnnotatedImage,
   cancelInference,
+  confirmInferenceJob,
+  setInferenceAssessment,
   deleteInference,
   deleteInferenceImage,
+  addInferenceImages,
   listInferenceJobs,
   listAvailableModels,
   listDatasetsWithTestFolders,
@@ -118,8 +121,26 @@ router.delete(
   deleteInferenceImage
 );
 
+// POST /api/inference/:inferenceId/images - Append already-annotated (on-device)
+// images to a completed job's results and recompute job-level aggregates.
+// Same permission model as deleting an image from a job.
+router.post(
+  '/:inferenceId/images',
+  authenticateToken,
+  requirePermissionOr(['deleteProjects', 'deleteOwnInference']),
+  uploadInferenceImages.array('files', 50),
+  addInferenceImages
+);
+
 // POST /api/inference/:inferenceId/cancel - Cancel a running inference job
 router.post('/:inferenceId/cancel', authenticateToken, requirePermission('runInference'), cancelInference);
+
+// POST /api/inference/:inferenceId/confirm - Mark a completed job as human-reviewed
+// (POST, not PATCH: see confirmInferenceJob's doc comment for why.)
+router.post('/:inferenceId/confirm', authenticateToken, requirePermission('runInference'), confirmInferenceJob);
+
+// PUT /api/inference/:inferenceId/assessment - Save the inspector's confirmed severity + damage types
+router.put('/:inferenceId/assessment', authenticateToken, requirePermission('runInference'), setInferenceAssessment);
 
 // DELETE /api/inference/:inferenceId - Delete an inference job
 // Permission check: deleteProjects (admins) OR deleteOwnInference (operators - with ownership verification in controller)

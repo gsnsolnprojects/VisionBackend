@@ -776,6 +776,8 @@ const listDatasets = async (req, res) => {
         isAugmented: d.isAugmented,
         augmentationStatus: d.augmentationStatus,
         backup_dataset_id: d.backupDatasetId ? d.backupDatasetId.toString() : null,
+        parentDatasetId: d.parentDatasetId ? d.parentDatasetId.toString() : null,
+        rootDatasetId: d.rootDatasetId ? d.rootDatasetId.toString() : null,
         augmentedFromVersion: d.augmentedFromVersion || null,
         createdAt: d.createdAt,
         updatedAt: d.updatedAt
@@ -2406,6 +2408,26 @@ const startAugmentation = async (req, res) => {
         ? options.augmentationMultiplier
         : null;
 
+    // Optional: scope augmentation to a subset of images (e.g. a newly added-and-labeled
+    // batch) instead of the whole dataset. When present, targetTrainTotal above means
+    // "final count for this subset", not the whole dataset — see augmentationWorker.js.
+    let imageIds = null;
+    if (Array.isArray(options?.imageIds) && options.imageIds.length > 0) {
+      const validIds = options.imageIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
+      if (validIds.length > 0) {
+        const ownedCount = await Image.countDocuments({
+          _id: { $in: validIds },
+          datasetId: dataset._id,
+        });
+        if (ownedCount === 0) {
+          return res.status(400).json({
+            error: 'None of the provided imageIds belong to this dataset.',
+          });
+        }
+        imageIds = validIds;
+      }
+    }
+
     // Enqueue augmentation job (versionName is validated and sanitized)
     const jobPayload = {
       datasetId: dataset._id.toString(),
@@ -2413,6 +2435,7 @@ const startAugmentation = async (req, res) => {
       targetTrainTotal,
       valTestMultiplier,
       augmentationMultiplier,
+      imageIds,
     };
 
     const job = await augmentationQueue.add(jobPayload, {
@@ -2561,6 +2584,8 @@ const duplicateDataset = async (req, res) => {
       labelSource: getLabelSource(sourceDataset),
       isAugmented: false,
       isActive: false,
+      parentDatasetId: sourceDataset._id,
+      rootDatasetId: sourceDataset.rootDatasetId || sourceDataset._id,
       split_seed: sourceDataset.split_seed,
       split_ratio_train: sourceDataset.split_ratio_train,
       split_ratio_val: sourceDataset.split_ratio_val,
@@ -3337,6 +3362,9 @@ const addDatasetFiles = async (req, res) => {
     const skipped = [];
     let addedImages = 0;
     let addedBytes = 0;
+    // Groups every Image doc created by this call so the frontend can later offer to
+    // label/augment just this batch (see models/Image.js batchId).
+    const batchId = new mongoose.Types.ObjectId().toString();
 
     for (const file of uploadedFiles) {
       const originalName = file.originalname;
@@ -3417,6 +3445,7 @@ const addDatasetFiles = async (req, res) => {
               height,
               hasLabels: false,
               hasAnnotations: false,
+              batchId,
             });
           }
         }
@@ -3455,6 +3484,7 @@ const addDatasetFiles = async (req, res) => {
       addedImages,
       skipped: skipped.length,
       details: { added, skipped },
+      batchId: addedImages > 0 ? batchId : null,
       folder: folderName,
       totalImages: liveCounts.totalImages,
       trainCount: liveCounts.trainCount,

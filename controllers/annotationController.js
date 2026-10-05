@@ -459,7 +459,8 @@ const getDatasetImages = async (req, res) => {
           width: img.width,
           height: img.height,
           hasAnnotations: img.hasAnnotations === true,
-          hasLabels: img.hasLabels === true
+          hasLabels: img.hasLabels === true,
+          batchId: img.batchId || null
         };
       })
     );
