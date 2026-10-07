@@ -12,6 +12,24 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 3000
+    },
+    {
+      "name": "visionm-authflow-alt",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "C:\\Gsn Soln\\visionm-authflow", "--", "--port", "5180", "--strictPort"],
+      "port": 5180
+    },
+    {
+      "name": "gsn-edge-api",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["-e", "process.chdir('C:/Users/ASUS/OneDrive/Desktop/Gsn Soln/Iot-login-demo'); require('C:/Users/ASUS/OneDrive/Desktop/Gsn Soln/Iot-login-demo/server.js')"],
+      "port": 8080
+    },
+    {
+      "name": "gsn-edge-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "C:\\Users\\ASUS\\OneDrive\\Desktop\\Gsn Soln\\Iot-login-demo\\frontend"],
+      "port": 5173
     }
   ]
 }
