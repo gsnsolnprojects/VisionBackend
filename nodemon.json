@@ -5,7 +5,9 @@
     "controllers",
     "models",
     "queue",
-    "services"
+    "services",
+    "middleware",
+    "utils"
   ],
   "ext": "js,json",
   "ignore": [

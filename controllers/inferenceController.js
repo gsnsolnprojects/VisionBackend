@@ -25,6 +25,18 @@ const { spawn } = require('child_process');
 // Key: inferenceId, Value: { process, modelPath, defaultConf, model, inferenceJob }
 const liveInferenceProcesses = new Map();
 
+/**
+ * Number of live camera sessions currently running for a company (used for plan limits)
+ * @param {string} company - Company name (e.g. "gsn")
+ */
+const countActiveLiveStreams = (company) => {
+  let count = 0;
+  for (const entry of liveInferenceProcesses.values()) {
+    if (entry.inferenceJob?.company === company && entry.process && !entry.process.killed) count++;
+  }
+  return count;
+};
+
 // ✅ Store pending frame requests for matching responses
 // Key: inferenceId_requestId, Value: { resolve, reject, timestamp }
 const pendingFrameRequests = new Map();
@@ -2557,6 +2569,7 @@ module.exports = {
   listAvailableModels,
   listDatasetsWithTestFolders,
   postEdgeLive,
-  getEdgeLive
+  getEdgeLive,
+  countActiveLiveStreams
 };
 

@@ -15,6 +15,7 @@ const auditRoutes = require('./routes/audit');
 const actionRoutes = require('./routes/actions');
 const projectRoutes = require('./routes/projects');
 const demoExtinguisherRoutes = require('./routes/demoExtinguisherRoutes');
+const subscriptionRoutes = require('./routes/subscription');
 const { authenticateToken } = require('./middleware/authMiddleware');
 const dns = require('dns');
 
@@ -135,6 +136,10 @@ app.use('/api/actions', actionRoutes);
 // collections in sync with a project's name after a rename in Supabase)
 // All routes in routes/projects.js will be prefixed with /api/projects
 app.use('/api/projects', projectRoutes);
+
+// ✅ Register subscription routes (company plan, access mode, limits and usage)
+// All routes in routes/subscription.js will be prefixed with /api/subscription
+app.use('/api/subscription', subscriptionRoutes);
 
 // ✅ Register temporary extinguisher OCR demo routes
 // All routes in routes/demoExtinguisherRoutes.js will be prefixed with /api/demo/extinguisher
