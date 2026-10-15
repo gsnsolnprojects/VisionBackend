@@ -33,7 +33,8 @@ const PORT = process.env.PORT || 3000;
 
 // ✅ Middleware: Parse JSON request bodies
 // This allows you to read JSON data from POST/PUT requests
-app.use(express.json());
+// (keeps the raw body too: Razorpay webhook signatures are computed over the exact bytes)
+app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 
 // ✅ Middleware: Parse URL-encoded form data
 app.use(express.urlencoded({ extended: true }));
@@ -72,6 +73,10 @@ app.use('/api', (req, res, next) => {
   }
   // Skip authentication for POST /api/inference/edge/live (edge device sends inference results; no user headers in MVP)
   if (req.method === 'POST' && req.path === '/inference/edge/live') {
+    return next();
+  }
+  // Skip authentication for the Razorpay webhook (Razorpay calls it; verified by signature)
+  if (req.method === 'POST' && req.path === '/subscription/webhook') {
     return next();
   }
   // Apply authentication middleware

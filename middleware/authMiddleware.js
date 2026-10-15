@@ -91,7 +91,7 @@ async function loadProfile(userId) {
       supabase.from('companies').select('name').eq('id', profile.company_id).maybeSingle(),
       supabase
         .from('company_subscriptions')
-        .select('plan, status, current_period_end, is_unlimited')
+        .select('*')
         .eq('company_id', profile.company_id)
         .maybeSingle(),
     ]);
@@ -205,8 +205,16 @@ function invalidateUserCache(userId) {
   profileCache.delete(userId);
 }
 
+/** Drop cached profile data for every member of a company, e.g. right after its plan changes */
+function invalidateCompanyCache(companyId) {
+  for (const [userId, entry] of profileCache) {
+    if (entry.profile?.company_id === companyId) profileCache.delete(userId);
+  }
+}
+
 module.exports = {
   authenticateToken,
   optionalAuthenticateToken,
-  invalidateUserCache
+  invalidateUserCache,
+  invalidateCompanyCache
 };
