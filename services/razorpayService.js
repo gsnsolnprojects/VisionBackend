@@ -133,6 +133,13 @@ function cancelSubscriptionAtPeriodEnd(subscriptionId) {
   });
 }
 
+/** Cancel straight away (used when a company is deleted, so it is never charged again). */
+function cancelSubscriptionNow(subscriptionId) {
+  return razorpayRequest('POST', `/subscriptions/${encodeURIComponent(subscriptionId)}/cancel`, {
+    cancel_at_cycle_end: 0,
+  });
+}
+
 function safeEqualHex(a, b) {
   const bufA = Buffer.from(String(a || ''), 'utf8');
   const bufB = Buffer.from(String(b || ''), 'utf8');
@@ -213,10 +220,48 @@ async function applyRazorpaySubscription(rzpSub) {
   return { applied: true, companyId: notes.company_id, status };
 }
 
+/**
+ * Save a successful VisionM subscription charge in subscription_payments
+ * (the superadmin Revenue page reads it). Safe to call twice for the same payment.
+ *
+ * @param {Object} payment - Razorpay payment entity (from the subscription.charged webhook)
+ * @param {Object} rzpSub - Razorpay subscription entity it belongs to
+ * @returns {Promise<{ recorded: boolean, reason?: string }>}
+ */
+async function recordSubscriptionPayment(payment, rzpSub) {
+  const notes = rzpSub?.notes || {};
+  if (notes.app !== APP_TAG || !notes.company_id) {
+    return { recorded: false, reason: 'not a VisionM subscription' };
+  }
+  if (!payment?.id || payment.status !== 'captured') {
+    return { recorded: false, reason: `payment not captured (${payment?.status || 'missing'})` };
+  }
+
+  const supabase = getSupabaseClient();
+  const { error } = await supabase.from('subscription_payments').upsert(
+    {
+      razorpay_payment_id: payment.id,
+      company_id: notes.company_id,
+      company_name: notes.company_name || null,
+      razorpay_subscription_id: rzpSub.id,
+      plan: notes.plan_id || null,
+      amount_paise: payment.amount,
+      currency: payment.currency || 'INR',
+      status: payment.status,
+      paid_at: new Date((payment.created_at || Date.now() / 1000) * 1000).toISOString(),
+    },
+    { onConflict: 'razorpay_payment_id' }
+  );
+  if (error) throw error;
+  return { recorded: true };
+}
+
 module.exports = {
   createSubscription,
   fetchSubscription,
   cancelSubscriptionAtPeriodEnd,
+  cancelSubscriptionNow,
+  recordSubscriptionPayment,
   verifyCheckoutSignature,
   verifyWebhookSignature,
   applyRazorpaySubscription,

@@ -195,6 +195,18 @@ const handleWebhook = async (req, res) => {
       return res.json({ received: true, ignored: event });
     }
 
+    // A successful monthly charge: keep a record for the superadmin Revenue page.
+    // Never let a problem here stop the plan update below.
+    const payment = req.body?.payload?.payment?.entity;
+    if (event === 'subscription.charged' && payment) {
+      try {
+        const saved = await razorpay.recordSubscriptionPayment(payment, rzpSub);
+        if (!saved.recorded) console.log(`[razorpay webhook] payment ${payment.id} not recorded: ${saved.reason}`);
+      } catch (paymentError) {
+        console.error(`[razorpay webhook] could not record payment ${payment.id}:`, paymentError.message);
+      }
+    }
+
     const result = await razorpay.applyRazorpaySubscription(rzpSub);
     if (result.applied) invalidateCompanyCache(result.companyId);
     console.log(`[razorpay webhook] ${event} ${rzpSub.id} -> ${result.applied ? result.status : result.reason}`);
