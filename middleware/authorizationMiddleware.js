@@ -236,7 +236,7 @@ function validateRoleAssignment(assignerRole, targetRole) {
   if (!canAssignRole(assignerRole, targetRole)) {
     return {
       allowed: false,
-      error: assignerRole === 'workspace_admin' 
+      error: targetRole === 'platform_admin'
         ? 'Cannot assign platform_admin role'
         : 'Insufficient permissions to assign roles'
     };
@@ -247,10 +247,30 @@ function validateRoleAssignment(assignerRole, targetRole) {
   };
 }
 
+/** The one superadmin: role platform_admin AND a member of the "gsn" company */
+function isSuperadmin(user) {
+  return user?.role === 'platform_admin' && String(user?.company || '').trim().toLowerCase() === 'gsn';
+}
+
+/**
+ * Only the superadmin may continue (superadmin panel endpoints)
+ */
+function requireSuperadmin(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Unauthorized', message: 'Authentication required' });
+  }
+  if (!isSuperadmin(req.user)) {
+    return res.status(403).json({ error: 'Forbidden', message: 'Only the GSN superadmin can do this' });
+  }
+  next();
+}
+
 module.exports = {
   requirePermission,
   requirePermissionOr,
   requireRole,
   requireWorkspaceAccess,
-  validateRoleAssignment
+  validateRoleAssignment,
+  isSuperadmin,
+  requireSuperadmin
 };

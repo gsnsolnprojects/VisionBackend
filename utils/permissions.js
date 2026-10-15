@@ -159,9 +159,10 @@ function isValidRole(role) {
  * @returns {boolean} True if assignment is allowed, false otherwise
  */
 function canAssignRole(assignerRole, targetRole) {
-  // platform_admin can assign any role
+  // platform_admin can assign any role except platform_admin itself:
+  // there is exactly one superadmin (GSN), set only from the database
   if (assignerRole === 'platform_admin') {
-    return isValidRole(targetRole);
+    return isValidRole(targetRole) && targetRole !== 'platform_admin';
   }
 
   // workspace_admin can assign workspace roles (not platform_admin)

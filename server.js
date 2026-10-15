@@ -16,6 +16,7 @@ const actionRoutes = require('./routes/actions');
 const projectRoutes = require('./routes/projects');
 const demoExtinguisherRoutes = require('./routes/demoExtinguisherRoutes');
 const subscriptionRoutes = require('./routes/subscription');
+const adminRoutes = require('./routes/admin');
 const { authenticateToken } = require('./middleware/authMiddleware');
 const dns = require('dns');
 
@@ -145,6 +146,10 @@ app.use('/api/projects', projectRoutes);
 // ✅ Register subscription routes (company plan, access mode, limits and usage)
 // All routes in routes/subscription.js will be prefixed with /api/subscription
 app.use('/api/subscription', subscriptionRoutes);
+
+// ✅ Register superadmin panel routes (GSN platform admin only)
+// All routes in routes/admin.js will be prefixed with /api/admin
+app.use('/api/admin', adminRoutes);
 
 // ✅ Register temporary extinguisher OCR demo routes
 // All routes in routes/demoExtinguisherRoutes.js will be prefixed with /api/demo/extinguisher
