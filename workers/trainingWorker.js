@@ -743,7 +743,7 @@ const processTrainingJob = async (job) => {
     console.log(`✅ Training job ${jobId} status updated to 'running'`);
 
     // ✅ Build dataset path
-    const datasetPath = storageAdapter.buildDatasetPath(company, project, dataset.version);
+    const datasetPath = storageAdapter.datasetRoot(dataset);
     console.log(`📁 Dataset path: ${datasetPath}`);
 
     // ✅ Create model storage directory — use client display name or auto v1, v2, …
@@ -1371,7 +1371,7 @@ async function finalizeTraining(
         );
       }
 
-      const datasetPath = storageAdapter.buildDatasetPath(company, project, dataset.version);
+      const datasetPath = storageAdapter.datasetRoot(dataset);
       const datasetYaml = path.join(datasetPath, 'data.yaml');
       const modelYaml = path.join(modelStoragePath, 'data.yaml');
       if (fs.existsSync(datasetYaml)) {

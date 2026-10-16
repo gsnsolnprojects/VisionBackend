@@ -196,11 +196,14 @@ async function getClassNamesForTrainedModel(model, options = {}) {
   }
 
   if (model.company && model.project && model.datasetVersion) {
-    const dsRoot = storageAdapter.buildDatasetPath(
-      model.company,
-      model.project,
-      model.datasetVersion,
-    );
+    // The training dataset's stored folder (survives renames, and is GSN's folder for linked samples)
+    const Dataset = require('../models/Dataset');
+    const trainedOn = model.datasetId
+      ? await Dataset.findById(model.datasetId).select('storagePath').lean().catch(() => null)
+      : null;
+    const dsRoot =
+      trainedOn?.storagePath ||
+      storageAdapter.buildDatasetPath(model.company, model.project, model.datasetVersion);
     const cm2 = path.join(dsRoot, 'class-mapping.json');
     const mapped2 = await parseClassMappingJson(cm2);
     if (mapped2 && mapped2.length > 0) return mapped2;

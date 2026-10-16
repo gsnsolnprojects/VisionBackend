@@ -244,6 +244,33 @@ class StorageAdapter {
   }
 
   /**
+   * Folder of an existing dataset: its stored storagePath, falling back to the
+   * company/project/version layout. Use this (not buildDatasetPath) for datasets that
+   * already exist: the stored path survives project renames and points linked sample
+   * datasets at GSN's shared copy.
+   * @param {{ storagePath?: string, company: string, project: string, version: string }} dataset
+   */
+  datasetRoot(dataset) {
+    return dataset.storagePath || this.buildDatasetPath(dataset.company, dataset.project, dataset.version);
+  }
+
+  datasetImagesPath(dataset) {
+    return path.join(this.datasetRoot(dataset), 'images');
+  }
+
+  datasetLabelsPath(dataset) {
+    return path.join(this.datasetRoot(dataset), 'labels');
+  }
+
+  datasetThumbnailsPath(dataset) {
+    return path.join(this.datasetRoot(dataset), 'thumbnails');
+  }
+
+  datasetThumbnailPath(dataset, storedName) {
+    return path.join(this.datasetThumbnailsPath(dataset), `thumb_${storedName}`);
+  }
+
+  /**
    * Build storage path for inference results
    * Format: /results/{company}/{project}/{modelId}/inference_{inferenceId}/
    * @param {string} company - Company identifier

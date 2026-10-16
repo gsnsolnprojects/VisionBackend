@@ -160,7 +160,7 @@ async function syncManifestFoldersFromImageIndex(dataset) {
  */
 async function relocateNonSplitImagesToTrain(dataset) {
   const images = await Image.find({ datasetId: dataset._id });
-  const datasetRoot = storageAdapter.buildDatasetPath(dataset.company, dataset.project, dataset.version);
+  const datasetRoot = storageAdapter.datasetRoot(dataset);
   let moved = 0;
 
   for (const img of images) {
@@ -1201,12 +1201,7 @@ const getFileThumbnail = async (req, res) => {
     }
 
     // ✅ Build thumbnail path using storageAdapter helper
-    const thumbnailPath = storageAdapter.getThumbnailPath(
-      dataset.company,
-      dataset.project,
-      dataset.version,
-      file.storedName
-    );
+    const thumbnailPath = storageAdapter.datasetThumbnailPath(dataset, file.storedName);
 
     // ✅ Check if thumbnail exists, if not fall back to original image
     const fileToServe = (await storageAdapter.exists(thumbnailPath)) 
@@ -1618,7 +1613,7 @@ const deleteDataset = async (req, res) => {
     }
 
     // ✅ Delete files from storage (local or Azure via adapter)
-    const dirPathToDelete = path.normalize(storageAdapter.buildDatasetPath(dataset.company, dataset.project, dataset.version));
+    const dirPathToDelete = path.normalize(storageAdapter.datasetRoot(dataset));
     const deleteResult = await storageAdapter.deleteDirectory(dirPathToDelete);
 
     if (!deleteResult.deleted) {
@@ -1776,7 +1771,7 @@ const deleteDatasetByVersion = async (req, res) => {
     }
 
     // ✅ Delete files from storage (local or Azure via adapter)
-    const dirPathToDelete = path.normalize(storageAdapter.buildDatasetPath(dataset.company, dataset.project, dataset.version));
+    const dirPathToDelete = path.normalize(storageAdapter.datasetRoot(dataset));
     const deleteResult = await storageAdapter.deleteDirectory(dirPathToDelete);
 
     if (!deleteResult.deleted) {
@@ -2269,7 +2264,7 @@ const createCategoriesFromClasses = async (req, res) => {
     const allCategories = await Category.getOrderedCategories(datasetId);
 
     // Build dataset path
-    const datasetPath = storageAdapter.buildDatasetPath(dataset.company, dataset.project, dataset.version);
+    const datasetPath = storageAdapter.datasetRoot(dataset);
 
     // Update data.yaml with actual category names
     const dataYamlPath = path.join(datasetPath, 'data.yaml');
@@ -3248,10 +3243,10 @@ const addDatasetFiles = async (req, res) => {
     const hasSplit = await datasetAlreadyHasSplit(dataset);
     const folderName = resolveFolderForNewPhotos(req.body.folder || req.body.folderName, hasSplit);
     const validExtensions = ['.jpg', '.jpeg', '.png', '.txt'];
-    const datasetRoot = storageAdapter.buildDatasetPath(dataset.company, dataset.project, dataset.version);
-    const imagesPath = storageAdapter.buildImagesPath(dataset.company, dataset.project, dataset.version);
-    const labelsPath = storageAdapter.buildLabelsPath(dataset.company, dataset.project, dataset.version);
-    const thumbnailsPath = storageAdapter.buildThumbnailsPath(dataset.company, dataset.project, dataset.version);
+    const datasetRoot = storageAdapter.datasetRoot(dataset);
+    const imagesPath = storageAdapter.datasetImagesPath(dataset);
+    const labelsPath = storageAdapter.datasetLabelsPath(dataset);
+    const thumbnailsPath = storageAdapter.datasetThumbnailsPath(dataset);
     await storageAdapter.ensureDir(path.join(imagesPath, folderName));
     await storageAdapter.ensureDir(path.join(labelsPath, folderName));
     await storageAdapter.ensureDir(thumbnailsPath);
@@ -3439,7 +3434,7 @@ const deleteDatasetFile = async (req, res) => {
       return res.status(404).json({ error: 'Not Found', message: 'File not found in this dataset' });
     }
 
-    const datasetPath = storageAdapter.buildDatasetPath(dataset.company, dataset.project, dataset.version);
+    const datasetPath = storageAdapter.datasetRoot(dataset);
     const toRemove = [file];
 
     if (file.type === 'image') {
@@ -3459,7 +3454,7 @@ const deleteDatasetFile = async (req, res) => {
       await removeLocalFileIfExists(fullPath);
       if (entry.type === 'image') {
         const thumbPath = path.join(
-          storageAdapter.buildThumbnailsPath(dataset.company, dataset.project, dataset.version),
+          storageAdapter.datasetThumbnailsPath(dataset),
           `thumb_${entry.storedName}`
         );
         await removeLocalFileIfExists(thumbPath);

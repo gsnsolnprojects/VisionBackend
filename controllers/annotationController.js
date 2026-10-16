@@ -40,11 +40,7 @@ async function ensureImageIndexForDataset(dataset) {
   const existingCount = await Image.countDocuments({ datasetId });
   if (existingCount > 0) return existingCount;
 
-  const datasetPath = storageAdapter.buildDatasetPath(
-    dataset.company,
-    dataset.project,
-    dataset.version
-  );
+  const datasetPath = storageAdapter.datasetRoot(dataset);
 
   /** @type {Array<{ storedName: string, storedPath: string, folder: string, size?: number }>} */
   let imageFiles = [];
@@ -250,7 +246,7 @@ const getUnannotatedImages = async (req, res) => {
           datasetId: datasetId.toString()
         });
         const thumbnailPath = image.storedPath.replace(/^images\//, 'thumbnails/');
-        const datasetPath = storageAdapter.buildDatasetPath(dataset.company, dataset.project, dataset.version);
+        const datasetPath = storageAdapter.datasetRoot(dataset);
         const fullThumbnailPath = path.join(datasetPath, thumbnailPath);
         const thumbnailExists = await storageAdapter.exists(fullThumbnailPath);
         const thumbnailUrl = await storageAdapter.generateSignedUrl(
@@ -321,7 +317,7 @@ const getUnlabeledImages = async (req, res) => {
         const thumbnailPath = imagePath.replace(/^images\//, 'thumbnails/');
         
         // Check if thumbnail exists, if not use image path
-        const datasetPath = storageAdapter.buildDatasetPath(dataset.company, dataset.project, dataset.version);
+        const datasetPath = storageAdapter.datasetRoot(dataset);
         const fullThumbnailPath = path.join(datasetPath, thumbnailPath);
         const thumbnailExists = await storageAdapter.exists(fullThumbnailPath);
         
@@ -439,7 +435,7 @@ const getDatasetImages = async (req, res) => {
         });
 
         const thumbnailPath = imagePath.replace(/^images\//, 'thumbnails/');
-        const datasetPath = storageAdapter.buildDatasetPath(dataset.company, dataset.project, dataset.version);
+        const datasetPath = storageAdapter.datasetRoot(dataset);
         const fullThumbnailPath = path.join(datasetPath, thumbnailPath);
         const thumbnailExists = await storageAdapter.exists(fullThumbnailPath);
 
@@ -1035,7 +1031,7 @@ const importLabelsToAnnotations = async (req, res) => {
       });
     }
 
-    const datasetPath = storageAdapter.buildDatasetPath(dataset.company, dataset.project, dataset.version);
+    const datasetPath = storageAdapter.datasetRoot(dataset);
     const details = [];
     let imported = 0;
     let skipped = 0;
@@ -1281,8 +1277,8 @@ const convertAnnotationsToYOLO = async (req, res) => {
     }
 
     // Build dataset path
-    const datasetPath = storageAdapter.buildDatasetPath(dataset.company, dataset.project, dataset.version);
-    const labelsBasePath = storageAdapter.buildLabelsPath(dataset.company, dataset.project, dataset.version);
+    const datasetPath = storageAdapter.datasetRoot(dataset);
+    const labelsBasePath = storageAdapter.datasetLabelsPath(dataset);
 
     // Ensure labels directory exists
     await storageAdapter.ensureDir(labelsBasePath);
@@ -1513,7 +1509,7 @@ const convertAnnotationsToYOLO = async (req, res) => {
  * Azure / missing-local files are copied into a temp file keyed by image id.
  */
 async function resolveLocalImagePath(dataset, imageDoc) {
-  const datasetPath = storageAdapter.buildDatasetPath(dataset.company, dataset.project, dataset.version);
+  const datasetPath = storageAdapter.datasetRoot(dataset);
   const fullPath = path.join(datasetPath, imageDoc.storedPath);
   const resolvedPath = path.resolve(fullPath);
   const resolvedDatasetPath = path.resolve(datasetPath);
@@ -1641,7 +1637,7 @@ const serveSignedImage = async (req, res) => {
     }
 
     // Build full file path
-    const datasetPath = storageAdapter.buildDatasetPath(dataset.company, dataset.project, dataset.version);
+    const datasetPath = storageAdapter.datasetRoot(dataset);
     const fullPath = path.join(datasetPath, decodedPath);
 
     // Security: Prevent directory traversal

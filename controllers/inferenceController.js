@@ -233,7 +233,7 @@ const startBatchInference = async (req, res) => {
 
     // ✅ Get test folder path
       testFolderPath = path.join(
-      storageAdapter.buildDatasetPath(dataset.company, dataset.project, dataset.version),
+      storageAdapter.datasetRoot(dataset),
       'images',
       'test'
     );

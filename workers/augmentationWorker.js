@@ -365,11 +365,7 @@ const processAugmentationJob = async (job) => {
     const newVersion = versionNameTrimmed;
 
     const outputRoot = storageAdapter.buildDatasetPath(company, project, newVersion);
-    const inputRoot = storageAdapter.buildDatasetPath(
-      company,
-      project,
-      originalDataset.version,
-    );
+    const inputRoot = storageAdapter.datasetRoot(originalDataset);
 
     // Create augmented dataset document (minimal fields; will be updated after success)
     // Start as inactive; will be set to active after successful augmentation
