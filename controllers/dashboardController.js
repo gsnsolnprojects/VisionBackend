@@ -574,7 +574,31 @@ const deleteProject = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/dashboard/learning-progress
+ * Counts behind the Playground learning path, for the caller's own company: datasets
+ * (and how many are GSN sample links), own trained models, and finished predictions.
+ */
+const getLearningProgress = async (req, res) => {
+  try {
+    const company = req.user?.company;
+    if (!company) return res.json({ datasets: 0, sampleDatasets: 0, models: 0, predictions: 0 });
+
+    const [datasets, sampleDatasets, models, predictions] = await Promise.all([
+      Dataset.countDocuments({ company, deletedAt: null }),
+      Dataset.countDocuments({ company, deletedAt: null, linkedFrom: { $ne: null } }),
+      Model.countDocuments({ company, linkedFrom: null }),
+      InferenceJob.countDocuments({ company, status: 'completed' }),
+    ]);
+    res.json({ datasets, sampleDatasets, models, predictions });
+  } catch (error) {
+    console.error('Error getting learning progress:', error);
+    res.status(500).json({ error: 'Could not load learning progress', message: error.message });
+  }
+};
+
 module.exports = {
+  getLearningProgress,
   getDashboardOverview,
   getDashboardActivity,
   getDashboardProjects,

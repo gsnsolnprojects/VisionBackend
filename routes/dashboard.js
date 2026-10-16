@@ -7,7 +7,8 @@ const {
   getDashboardActivity,
   getDashboardProjects,
   getProjectSummary,
-  deleteProject
+  deleteProject,
+  getLearningProgress,
 } = require('../controllers/dashboardController');
 
 /**
@@ -18,6 +19,9 @@ const {
 
 // GET /api/dashboard/overview
 router.get('/overview', authenticateToken, requirePermission('viewProjects'), getDashboardOverview);
+
+// GET /api/dashboard/learning-progress - Playground learning path counts for the caller's company
+router.get('/learning-progress', authenticateToken, requirePermission('viewProjects'), getLearningProgress);
 
 // GET /api/dashboard/activity
 router.get('/activity', authenticateToken, requirePermission('viewProjects'), getDashboardActivity);
