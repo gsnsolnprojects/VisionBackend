@@ -769,6 +769,7 @@ const listDatasets = async (req, res) => {
         parentDatasetId: d.parentDatasetId ? d.parentDatasetId.toString() : null,
         rootDatasetId: d.rootDatasetId ? d.rootDatasetId.toString() : null,
         augmentedFromVersion: d.augmentedFromVersion || null,
+        isLinkedSample: !!d.linkedFrom,
         createdAt: d.createdAt,
         updatedAt: d.updatedAt
       });

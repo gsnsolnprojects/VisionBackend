@@ -59,10 +59,26 @@ const LINKED_READ_ONLY_MESSAGE =
 
 const matches = (rules, method, subPath) => rules.some(([m, re]) => m === method && re.test(subPath));
 
+const DOWNLOAD_ROUTE = /^\/api\/dataset\/([^/]+)\/download$/;
+
 async function customerAccess(req, res, next) {
   try {
-    if (req.method === 'GET' || req.method === 'OPTIONS' || !req.user) return next();
+    if (req.method === 'OPTIONS' || !req.user) return next();
     const urlPath = req.originalUrl.split('?')[0];
+
+    // GSN's sample data can be used in a customer's project, not downloaded
+    if (req.method === 'GET') {
+      const download = urlPath.match(DOWNLOAD_ROUTE);
+      if (download && !isGsnUser(req.user) && mongoose.Types.ObjectId.isValid(download[1])) {
+        const linked = await Dataset.exists({ _id: download[1], linkedFrom: { $ne: null } });
+        if (linked) {
+          const message = "Shared GSN sample datasets can't be downloaded.";
+          return res.status(403).json({ error: message, message, code: 'linked_no_download' });
+        }
+      }
+      return next();
+    }
+
     const route = urlPath.match(DATASET_ROUTE);
     if (!route) return next();
     const subPath = urlPath.slice('/api/dataset'.length);

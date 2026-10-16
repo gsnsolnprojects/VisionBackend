@@ -1,4 +1,11 @@
 const Model = require('../models/Model');
+const {
+  isGsnUser,
+  countOwnModels,
+  countPendingTrainings,
+  CUSTOMER_MODEL_LIMIT,
+  CUSTOMER_MODEL_SIZES,
+} = require('../middleware/customerAccessMiddleware');
 const TrainingJob = require('../models/TrainingJob');
 const { buildWorkspaceFilter, validateWorkspaceAccess, canAccessAllWorkspaces } = require('../utils/workspaceScoping');
 const fs = require('fs');
@@ -58,13 +65,14 @@ const listModels = async (req, res) => {
     const models = await Model.find({ company, project })
       .collation({ locale: 'en', strength: 2 })
       .sort({ createdAt: -1 }) // Newest first
-      .select('modelId modelVersion modelType status metrics insights createdAt datasetVersion datasetId storagePath')
+      .select('modelId modelVersion modelType status metrics insights createdAt datasetVersion datasetId storagePath linkedFrom')
       .lean();
 
     const formattedModels = await Promise.all(models.map(async (model) => {
       const metrics = await hydrateAndPersistModelMetrics(Model, model);
       return {
       modelId: model.modelId,
+      isLinkedSample: !!model.linkedFrom,
       modelVersion: model.modelVersion,
       modelType: model.modelType,
       status: model.status || 'completed',
@@ -755,7 +763,33 @@ const deleteModel = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/models/quota
+ * How many models the caller's company may still train. GSN is not limited; customers
+ * keep CUSTOMER_MODEL_LIMIT trained models (linked sample models don't count) and train
+ * nano / small sizes only.
+ */
+const getModelQuota = async (req, res) => {
+  try {
+    if (isGsnUser(req.user)) return res.json({ limited: false });
+    const [own, pending] = await Promise.all([
+      countOwnModels(req.user.company),
+      countPendingTrainings(req.user.company),
+    ]);
+    res.json({
+      limited: true,
+      limit: CUSTOMER_MODEL_LIMIT,
+      used: own + pending,
+      sizes: CUSTOMER_MODEL_SIZES,
+    });
+  } catch (error) {
+    console.error('Error getting model quota:', error);
+    res.status(500).json({ error: 'Could not load model quota', message: error.message });
+  }
+};
+
 module.exports = {
+  getModelQuota,
   listModels,
   getModel,
   getModelMetrics,

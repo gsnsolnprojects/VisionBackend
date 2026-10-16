@@ -3,6 +3,7 @@ const router = express.Router();
 const { authenticateToken } = require('../middleware/authMiddleware');
 const { requirePermission } = require('../middleware/authorizationMiddleware');
 const {
+  getModelQuota,
   listModels,
   getModel,
   getModelMetrics,
@@ -33,6 +34,9 @@ const {
 
 // GET /api/models - List all models (filtered by company/project)
 router.get('/', authenticateToken, requirePermission('viewModels'), listModels);
+
+// GET /api/models/quota - how many more models the caller's company may train (customers)
+router.get('/quota', authenticateToken, requirePermission('viewModels'), getModelQuota);
 
 // Deploy routes (must come before /:modelId to avoid route conflicts)
 // GET /api/models/:modelId/deploy/scan-devices - Scan network for devices
