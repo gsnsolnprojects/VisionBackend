@@ -4,6 +4,7 @@ const Model = require('../models/Model');
 const { trainingQueue } = require('../queue');
 const trainingService = require('../services/trainingService');
 const auditService = require('../services/auditService');
+const { checkCustomerTraining } = require('../middleware/customerAccessMiddleware');
 const { buildWorkspaceFilter, validateWorkspaceAccess, canAccessAllWorkspaces } = require('../utils/workspaceScoping');
 const fs = require('fs');
 const path = require('path');
@@ -602,6 +603,17 @@ const startTraining = async (req, res) => {
       );
     }
 
+    // Customers: nano/small only, limited number of models per company
+    const customerBlock = await checkCustomerTraining(req.user, {
+      modelType: finalModelType,
+      modelSize: normalizedModelSize,
+      modelKey: finalModelKey,
+      baseModel: trainedModel,
+    });
+    if (customerBlock) {
+      return res.status(customerBlock.status).json({ error: customerBlock.message, message: customerBlock.message });
+    }
+
     // Validate dataset is ready for training
     const validation = await trainingService.validateDatasetForTraining(dataset._id);
     if (!validation.valid) {
@@ -966,6 +978,18 @@ const retryTraining = async (req, res) => {
         error: `Cannot retry job with status: ${originalJob.status}`,
         validStatuses: ['failed', 'cancelled']
       });
+    }
+
+    // Customers: same size and model-count rules as a new training
+    const retryBase = originalJob.modelId ? await Model.findOne({ modelId: originalJob.modelId }).lean() : null;
+    const customerBlock = await checkCustomerTraining(req.user, {
+      modelType: originalJob.modelType,
+      modelSize: originalJob.modelSize,
+      modelKey: originalJob.modelKey,
+      baseModel: retryBase,
+    });
+    if (customerBlock) {
+      return res.status(customerBlock.status).json({ error: customerBlock.message, message: customerBlock.message });
     }
 
     if (await respondIfTrainingBusy(res)) {

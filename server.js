@@ -20,6 +20,7 @@ const adminRoutes = require('./routes/admin');
 const sampleRoutes = require('./routes/samples');
 const { authenticateToken } = require('./middleware/authMiddleware');
 const { requirePlanForWork } = require('./middleware/planAccessMiddleware');
+const { customerAccess } = require('./middleware/customerAccessMiddleware');
 const dns = require('dns');
 
 dns.setServers(['8.8.8.8', '1.1.1.1']);
@@ -89,6 +90,10 @@ app.use('/api', (req, res, next) => {
 // ✅ Plan access: creating / running work (upload, label, train, inference, samples)
 // needs an active plan; viewing and stopping jobs stay allowed
 app.use('/api', requirePlanForWork);
+
+// ✅ Customer rules: companies outside GSN work with linked GSN sample datasets (no
+// uploading or labelling), and linked sample datasets are read-only for everyone
+app.use('/api', customerAccess);
 
 // ✅ Request logging middleware (for debugging)
 app.use((req, res, next) => {
