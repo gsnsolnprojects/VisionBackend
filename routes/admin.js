@@ -29,6 +29,7 @@ const {
   requireEnabled: requirePublishEnabled,
   listPublishDatasets,
   savePublishSelection,
+  setProjectPublish,
 } = require('../controllers/adminPublishController');
 
 /**
@@ -51,6 +52,7 @@ const {
  * DELETE /api/admin/sample-library/:itemId
  * GET    /api/admin/publish/datasets     (local setup only)
  * PUT    /api/admin/publish/selection    (local setup only)
+ * PUT    /api/admin/publish/project      (local setup only)
  */
 router.use(authenticateToken, requireSuperadmin);
 
@@ -79,5 +81,6 @@ router.delete('/sample-library/:itemId', deleteLibraryItem);
 // Publish to live: pick datasets to copy to the AWS setup (only when ENABLE_PUBLISH_TO_LIVE=true)
 router.get('/publish/datasets', requirePublishEnabled, listPublishDatasets);
 router.put('/publish/selection', requirePublishEnabled, savePublishSelection);
+router.put('/publish/project', requirePublishEnabled, setProjectPublish);
 
 module.exports = router;

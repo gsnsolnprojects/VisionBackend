@@ -4,15 +4,39 @@ const mongoose = require('mongoose');
 const Dataset = require('../models/Dataset');
 const Model = require('../models/Model');
 const auditService = require('../services/auditService');
+const { getSupabaseClient } = require('../services/supabaseService');
 
 /**
  * Superadmin: choose which datasets (and the models trained on them) get copied to the
  * live AWS setup. Only the choice is stored here (Dataset.publishToLive); the copy itself
  * is a separate step. Available only when ENABLE_PUBLISH_TO_LIVE=true (the local setup).
  *
- * GET /api/admin/publish/datasets   - every dataset version with size, images and models
+ * GET /api/admin/publish/datasets   - every project (with its publish switch) and every dataset
+ *                                     version with size, images and models
  * PUT /api/admin/publish/selection  { datasetIds: string[] } - the full new selection
+ * PUT /api/admin/publish/project    { projectId, publish } - show / hide a whole project on the
+ *                                     live site (Supabase projects.publish_to_live)
  */
+
+/** Supabase projects with their company names: [{ id, name, company, publish }] */
+async function loadProjects() {
+  const supabase = getSupabaseClient();
+  const [{ data: projects, error: pError }, { data: companies, error: cError }] = await Promise.all([
+    supabase.from('projects').select('id, name, company_id, publish_to_live'),
+    supabase.from('companies').select('id, name'),
+  ]);
+  if (pError) throw pError;
+  if (cError) throw cError;
+  const companyName = new Map((companies || []).map((c) => [c.id, c.name]));
+  return (projects || []).map((p) => ({
+    id: p.id,
+    name: String(p.name || '').trim(),
+    company: companyName.get(p.company_id) || null,
+    publish: p.publish_to_live !== false,
+  }));
+}
+
+const projectKey = (company, project) => `${String(company || '').trim().toLowerCase()}/${String(project || '').trim().toLowerCase()}`;
 
 const isEnabled = () => process.env.ENABLE_PUBLISH_TO_LIVE === 'true';
 
@@ -56,14 +80,16 @@ function requireEnabled(req, res, next) {
 
 const listPublishDatasets = async (req, res) => {
   try {
-    const [datasets, models] = await Promise.all([
-      Dataset.find({ deletedAt: null })
+    const [datasets, models, supabaseProjects] = await Promise.all([
+      // Linked sample datasets are customer links to GSN's copy, not data of their own
+      Dataset.find({ deletedAt: null, linkedFrom: null })
         .select('company project version status totalImages storagePath createdAt publishToLive')
         .sort({ company: 1, project: 1, createdAt: 1 })
         .lean(),
-      Model.find({})
+      Model.find({ linkedFrom: null })
         .select('modelId modelType modelVersion datasetId datasetVersion company project storagePath createdAt')
         .lean(),
+      loadProjects(),
     ]);
 
     // Folder sizes, each folder measured once (several models can share one folder)
@@ -113,18 +139,25 @@ const listPublishDatasets = async (req, res) => {
       })
     );
 
-    // Group by company + project for the panel
+    // One group per project: every Supabase project (even without datasets), plus any dataset
+    // project that has no Supabase row (shown without a switch)
     const projects = [];
     const byKey = new Map();
+    for (const p of supabaseProjects) {
+      const group = { projectId: p.id, company: p.company, project: p.name, publish: p.publish, versions: [] };
+      byKey.set(projectKey(p.company, p.name), group);
+      projects.push(group);
+    }
     for (const row of rows) {
-      const key = `${row.company}/${row.project}`;
+      const key = projectKey(row.company, row.project);
       if (!byKey.has(key)) {
-        const group = { company: row.company, project: row.project, versions: [] };
+        const group = { projectId: null, company: row.company, project: row.project, publish: true, versions: [] };
         byKey.set(key, group);
         projects.push(group);
       }
       byKey.get(key).versions.push(row);
     }
+    projects.sort((a, b) => `${a.company}/${a.project}`.localeCompare(`${b.company}/${b.project}`));
 
     res.json({ projects });
   } catch (error) {
@@ -144,7 +177,9 @@ const savePublishSelection = async (req, res) => {
       return res.status(400).json({ error: 'Invalid request', message: 'One or more dataset ids are not valid' });
     }
 
-    const chosen = await Dataset.find({ _id: { $in: unique }, deletedAt: null }).select('project version storagePath').lean();
+    const chosen = await Dataset.find({ _id: { $in: unique }, deletedAt: null, linkedFrom: null })
+      .select('company project version storagePath')
+      .lean();
     if (chosen.length !== unique.length) {
       return res.status(400).json({ error: 'Invalid request', message: 'Some datasets were not found or are deleted' });
     }
@@ -153,6 +188,15 @@ const savePublishSelection = async (req, res) => {
       return res.status(400).json({
         error: 'Invalid request',
         message: `These datasets have no files on this computer: ${missing.map((d) => `${d.project} / ${d.version}`).join(', ')}`,
+      });
+    }
+
+    const hidden = new Set((await loadProjects()).filter((p) => !p.publish).map((p) => projectKey(p.company, p.name)));
+    const inHidden = chosen.filter((d) => hidden.has(projectKey(d.company, d.project)));
+    if (inHidden.length) {
+      return res.status(400).json({
+        error: 'Invalid request',
+        message: `These datasets are in projects hidden on the live site: ${inHidden.map((d) => `${String(d.project).trim()} / ${d.version}`).join(', ')}`,
       });
     }
 
@@ -177,4 +221,43 @@ const savePublishSelection = async (req, res) => {
   }
 };
 
-module.exports = { requireEnabled, listPublishDatasets, savePublishSelection };
+const setProjectPublish = async (req, res) => {
+  try {
+    const { projectId, publish } = req.body || {};
+    if (typeof projectId !== 'string' || !projectId || typeof publish !== 'boolean') {
+      return res.status(400).json({ error: 'Invalid request', message: 'projectId and publish (true/false) are required' });
+    }
+    const project = (await loadProjects()).find((p) => p.id === projectId);
+    if (!project) return res.status(404).json({ error: 'Not found', message: 'Project not found' });
+
+    const { error } = await getSupabaseClient().from('projects').update({ publish_to_live: publish }).eq('id', projectId);
+    if (error) throw error;
+
+    // A hidden project's datasets can't be published either
+    let unticked = 0;
+    if (!publish && project.company) {
+      const escaped = project.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const nameMatcher = new RegExp(`^\\s*${escaped}\\s*$`); // also matches names saved with stray spaces
+      const result = await Dataset.updateMany(
+        { company: project.company, project: nameMatcher, publishToLive: true },
+        { $set: { publishToLive: false } }
+      );
+      unticked = result.modifiedCount;
+    }
+
+    auditService.logAction({
+      action: 'update',
+      resourceType: 'project',
+      resourceId: projectId,
+      details: { company: project.company, project: project.name, change: publish ? 'published to live' : 'hidden on live', by: 'superadmin' },
+      req,
+    });
+
+    res.json({ success: true, projectId, publish, unticked });
+  } catch (error) {
+    console.error('[admin] set project publish failed:', error);
+    res.status(500).json({ error: 'Could not change the project', message: error.message });
+  }
+};
+
+module.exports = { requireEnabled, listPublishDatasets, savePublishSelection, setProjectPublish };
