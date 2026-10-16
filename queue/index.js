@@ -33,6 +33,18 @@ function getRedisConfig() {
     };
   }
 
+  // Plain Redis on another host without a password, e.g. the "redis" container next to
+  // the API in Docker (TLS only when REDIS_TLS=true)
+  if (process.env.REDIS_HOST) {
+    return {
+      host: process.env.REDIS_HOST,
+      port: Number(process.env.REDIS_PORT || 6379),
+      ...(process.env.REDIS_TLS === 'true' ? { tls: {} } : {}),
+      enableReadyCheck: false,
+      maxRetriesPerRequest: null,
+    };
+  }
+
   // Local Redis
   return {
     host: '127.0.0.1',

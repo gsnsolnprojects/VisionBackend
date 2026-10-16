@@ -1,0 +1,31 @@
+# Keep the image to code + base weights; data lives on the /data volume
+
+.git
+.github
+.claude
+.cursor
+node_modules
+.env
+worker.env
+*.log
+
+# Data folders (on the server they're on /data)
+datasets
+results
+uploads
+Videos
+test-frontend
+
+# models/ holds both Mongoose schemas (*.js) and trained-model folders:
+# keep the schemas and the base weights, drop every company's trained models
+models/*
+!models/*.js
+!models/base
+
+# Docs, diagnostics and one-off files
+*.md
+!README.md
+docs
+inference-jobs-diagnostic-report.json
+deletetesting.txt
+*.code-workspace
