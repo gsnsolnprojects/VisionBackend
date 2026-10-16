@@ -25,6 +25,11 @@ const {
   getDatasetPlaygroundStatus,
   setDatasetPlayground,
 } = require('../controllers/adminSampleLibraryController');
+const {
+  requireEnabled: requirePublishEnabled,
+  listPublishDatasets,
+  savePublishSelection,
+} = require('../controllers/adminPublishController');
 
 /**
  * Superadmin Routes (GSN platform admin only)
@@ -44,6 +49,8 @@ const {
  * POST   /api/admin/sample-library/add-all
  * PATCH  /api/admin/sample-library/:itemId
  * DELETE /api/admin/sample-library/:itemId
+ * GET    /api/admin/publish/datasets     (local setup only)
+ * PUT    /api/admin/publish/selection    (local setup only)
  */
 router.use(authenticateToken, requireSuperadmin);
 
@@ -68,5 +75,9 @@ router.get('/sample-library/datasets', getDatasetPlaygroundStatus);
 router.post('/sample-library/datasets/:datasetId/playground', setDatasetPlayground);
 router.patch('/sample-library/:itemId', updateLibraryItem);
 router.delete('/sample-library/:itemId', deleteLibraryItem);
+
+// Publish to live: pick datasets to copy to the AWS setup (only when ENABLE_PUBLISH_TO_LIVE=true)
+router.get('/publish/datasets', requirePublishEnabled, listPublishDatasets);
+router.put('/publish/selection', requirePublishEnabled, savePublishSelection);
 
 module.exports = router;

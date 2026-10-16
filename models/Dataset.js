@@ -208,6 +208,13 @@ const datasetSchema = new mongoose.Schema({
     index: true // Indexed for faster queries to filter deleted datasets
   },
 
+  // Superadmin's pick of datasets to copy to the live (AWS) setup; only used locally
+  publishToLive: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+
   // Active dataset flag (for augmentation feature)
   // When augmentation completes, the augmented dataset becomes active and original becomes inactive
   isActive: {
