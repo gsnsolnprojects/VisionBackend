@@ -281,16 +281,28 @@ async function deactivateAndRemoveFromWorkspace(userId) {
 async function deleteProjectRow(company, project) {
   try {
     const supabase = getSupabaseClient();
-    const { error } = await supabase
-      .from('projects')
-      .delete()
-      .eq('company', company)
-      .eq('project', project);
+    const { data: companyRow, error: companyError } = await supabase
+      .from('companies')
+      .select('id')
+      .eq('name', company)
+      .maybeSingle();
+    if (companyError) return { success: false, error: companyError.message };
+    if (!companyRow) return { success: false, error: `Company "${company}" not found` };
 
+    // Match the name ignoring surrounding spaces (some projects were saved as e.g. "webcam ")
+    const { data: rows, error: listError } = await supabase
+      .from('projects')
+      .select('id, name')
+      .eq('company_id', companyRow.id);
+    if (listError) return { success: false, error: listError.message };
+    const ids = (rows || []).filter((r) => String(r.name).trim() === String(project).trim()).map((r) => r.id);
+    if (ids.length === 0) return { success: true, deleted: 0 }; // already removed (e.g. by the app)
+
+    const { error } = await supabase.from('projects').delete().in('id', ids);
     if (error) {
       return { success: false, error: error.message };
     }
-    return { success: true };
+    return { success: true, deleted: ids.length };
   } catch (error) {
     console.error('Error deleting project row from Supabase:', error.message);
     return { success: false, error: error.message };

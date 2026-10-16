@@ -10,6 +10,18 @@ const { buildWorkspaceFilter, validateWorkspaceAccess, canAccessAllWorkspaces } 
 const auditService = require('../services/auditService');
 const path = require('path');
 const { deleteProjectRow } = require('../services/supabaseService');
+const { removeLibraryEntriesForDatasets } = require('../services/sampleLibraryService');
+
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Match a project name even if it was stored with spaces around it: some older projects
+ * were saved as e.g. "webcam " while the app sends "webcam".
+ */
+const projectNameMatcher = (project) => new RegExp(`^\\s*${escapeRegex(String(project).trim())}\\s*$`);
+
+/** Windows drops trailing spaces in paths ("webcam \\v2") unless the \\\\?\\ form is used */
+const fsPath = (p) => path.toNamespacedPath(p);
 
 /**
  * Dashboard Controller
@@ -308,7 +320,7 @@ const getProjectSummary = async (req, res) => {
       }
     }
 
-    const filter = { company, project };
+    const filter = { company, project: projectNameMatcher(project) };
 
     const [datasetsCount, modelsCount, trainingJobsCount, inferenceJobsCount] = await Promise.all([
       Dataset.countDocuments({ ...filter, deletedAt: null }),
@@ -366,7 +378,13 @@ const deleteProject = async (req, res) => {
       }
     }
 
-    const filter = { company, project };
+    const filter = { company, project: projectNameMatcher(project) };
+
+    // Every spelling the project was stored under (e.g. "webcam" and "webcam "), for its folders on disk
+    const storedNames = new Set([String(project).trim()]);
+    for (const M of [Dataset, Model, TrainingJob, InferenceJob]) {
+      (await M.distinct('project', filter)).forEach((name) => storedNames.add(name));
+    }
 
     // Pre-check: no active datasets (processing/queued)
     const activeDatasets = await Dataset.countDocuments({
@@ -417,16 +435,16 @@ const deleteProject = async (req, res) => {
     const inferenceJobs = await InferenceJob.find(filter).lean();
     for (const job of inferenceJobs) {
       const results = job.results || {};
-      if (results.resultsPath && fs.existsSync(results.resultsPath)) {
+      if (results.resultsPath && fs.existsSync(fsPath(results.resultsPath))) {
         try {
-          fs.rmSync(results.resultsPath, { recursive: true, force: true });
+          fs.rmSync(fsPath(results.resultsPath), { recursive: true, force: true });
         } catch (e) {
           console.warn(`Could not delete inference results: ${e.message}`);
         }
       }
-      if (results.framesPath && fs.existsSync(results.framesPath)) {
+      if (results.framesPath && fs.existsSync(fsPath(results.framesPath))) {
         try {
-          fs.rmSync(results.framesPath, { recursive: true, force: true });
+          fs.rmSync(fsPath(results.framesPath), { recursive: true, force: true });
         } catch (e) {
           console.warn(`Could not delete inference frames: ${e.message}`);
         }
@@ -438,16 +456,16 @@ const deleteProject = async (req, res) => {
     // 2. Delete models (storage + document)
     const models = await Model.find(filter).lean();
     for (const model of models) {
-      if (model.storagePath && fs.existsSync(model.storagePath)) {
+      if (model.storagePath && fs.existsSync(fsPath(model.storagePath))) {
         try {
-          fs.rmSync(model.storagePath, { recursive: true, force: true });
+          fs.rmSync(fsPath(model.storagePath), { recursive: true, force: true });
         } catch (e) {
           console.warn(`Could not delete model storage: ${e.message}`);
         }
       }
-      if (model.chartDataPath && model.chartDataPath !== model.storagePath && fs.existsSync(model.chartDataPath)) {
+      if (model.chartDataPath && model.chartDataPath !== model.storagePath && fs.existsSync(fsPath(model.chartDataPath))) {
         try {
-          fs.rmSync(model.chartDataPath, { recursive: true, force: true });
+          fs.rmSync(fsPath(model.chartDataPath), { recursive: true, force: true });
         } catch (e) {
           console.warn(`Could not delete chart data: ${e.message}`);
         }
@@ -474,9 +492,9 @@ const deleteProject = async (req, res) => {
       if (dataset.status === 'processing' || dataset.status === 'queued') {
         continue; // Should not happen due to pre-check
       }
-      if (dataset.storagePath && fs.existsSync(dataset.storagePath)) {
+      if (dataset.storagePath && fs.existsSync(fsPath(dataset.storagePath))) {
         try {
-          fs.rmSync(dataset.storagePath, { recursive: true, force: true });
+          fs.rmSync(fsPath(dataset.storagePath), { recursive: true, force: true });
         } catch (e) {
           console.warn(`Could not delete dataset files: ${e.message}`);
         }
@@ -487,16 +505,24 @@ const deleteProject = async (req, res) => {
       deleted.datasets += 1;
     }
 
-    // 6. Remove project-level folders from disk (datasets/company/project, models/company/project, results/company/project)
-    const projectFolders = [
-      path.join(process.cwd(), 'datasets', company, project),
-      path.join(process.cwd(), 'models', company, project),
-      path.join(process.cwd(), 'results', company, project)
-    ];
+    // Sample library entries pointing at this project's datasets go with them
+    deleted.sampleLibraryEntries = await removeLibraryEntriesForDatasets(projectDatasetIds);
+
+    // 6. Remove project-level folders from disk (datasets/company/project, models/company/project,
+    //    results/company/project) for every spelling the project was stored under
+    const projectFolders = [];
+    for (const name of storedNames) {
+      if (!name.trim()) continue;
+      for (const base of ['datasets', 'models', 'results']) {
+        const baseDir = path.join(process.cwd(), base, company);
+        const dir = path.join(baseDir, name);
+        if (path.dirname(dir) === baseDir) projectFolders.push(dir); // never outside {base}/{company}
+      }
+    }
     for (const dir of projectFolders) {
-      if (fs.existsSync(dir)) {
+      if (fs.existsSync(fsPath(dir))) {
         try {
-          fs.rmSync(dir, { recursive: true, force: true });
+          fs.rmSync(fsPath(dir), { recursive: true, force: true });
         } catch (e) {
           console.warn(`Could not remove project folder ${dir}: ${e.message}`);
         }
