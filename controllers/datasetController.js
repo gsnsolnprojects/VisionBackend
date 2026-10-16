@@ -8,24 +8,14 @@ const Category = require('../models/Category');
 const Annotation = require('../models/Annotation');
 const Image = require('../models/Image');
 const storageAdapter = require('../services/storageAdapter');
+// getLabelSource: labelSource for frontend badges (Unlabeled, Pre-Labelled, Manually Labelled)
+const { copyDataset, getLabelSource } = require('../services/datasetCopyService');
+const { removeLibraryEntriesForDatasets } = require('../services/sampleLibraryService');
 const { preprocessingQueue, augmentationQueue } = require('../queue');
 const { generateDataYaml, getLabelFilePath } = require('../utils/yoloConverter');
 const auditService = require('../services/auditService');
 const { buildWorkspaceFilter, validateWorkspaceAccess, canAccessAllWorkspaces } = require('../utils/workspaceScoping');
 const { sanitizeString } = require('../middleware/xssSanitizer');
-
-/**
- * Derive labelSource for frontend badges (Unlabeled, Pre-Labelled, Manually Labelled).
- * Augmented datasets use stored labelSource; non-augmented derive from status/datasetType.
- */
-function getLabelSource(dataset) {
-  if (dataset.isAugmented && dataset.labelSource) return dataset.labelSource;
-  const dt = dataset.datasetType ?? (dataset.status === 'ready_to_train' ? 'labeled' : null);
-  if (dt === 'unlabeled') return 'unlabeled';
-  if (dataset.status === 'ready_to_train') return 'manually_labeled';
-  if (dataset.status === 'ready' && dt === 'labeled') return 'pre_labelled';
-  return null;
-}
 
 /** Map an Image row to train / val / test using folder name or storedPath. */
 function classifySplitFolder(folder, storedPath) {
@@ -1650,6 +1640,7 @@ const deleteDataset = async (req, res) => {
     dataset.deletedAt = new Date();
     dataset.status = 'failed'; // Mark status as failed to indicate deletion
     await dataset.save();
+    await removeLibraryEntriesForDatasets([dataset._id]);
 
     console.log(`✅ [DELETE] Dataset soft deleted successfully:`, {
       datasetId: dataset._id.toString(),
@@ -1809,6 +1800,7 @@ const deleteDatasetByVersion = async (req, res) => {
     dataset.deletedAt = new Date();
     dataset.status = 'failed'; // Mark status as failed to indicate deletion
     await dataset.save();
+    await removeLibraryEntriesForDatasets([dataset._id]);
 
     console.log(`✅ [DELETE] Dataset version soft deleted successfully:`, {
       datasetId: dataset._id.toString(),
@@ -2548,107 +2540,21 @@ const duplicateDataset = async (req, res) => {
       });
     }
 
-    // Copy every file on disk into the new version's folder before touching Mongo, so a
-    // disk-copy failure never leaves a half-created dataset record behind.
-    const newStoragePath = storageAdapter.buildDatasetPath(
-      sourceDataset.company,
-      sourceDataset.project,
-      versionName
-    );
-    await storageAdapter.copyDirectory(sourceDataset.storagePath, newStoragePath);
-
-    // Create the new Dataset document — independent copy, not active, not marked "augmented"
-    const newDataset = new Dataset({
+    // Independent copy in the same project, not active, not marked "augmented"
+    const { dataset: newDataset, images, categories } = await copyDataset(sourceDataset, {
       company: sourceDataset.company,
       project: sourceDataset.project,
       version: versionName,
-      storagePath: newStoragePath,
-      files: sourceDataset.files.map((f) => {
-        const plain = f.toObject();
-        delete plain._id;
-        return plain;
-      }),
-      totalImages: sourceDataset.totalImages,
-      sizeBytes: sourceDataset.sizeBytes,
-      labels: sourceDataset.labels,
-      datasetType: sourceDataset.datasetType,
-      annotationStatus: sourceDataset.annotationStatus,
-      unlabeledImagesCount: sourceDataset.unlabeledImagesCount,
-      status: sourceDataset.status,
-      labeledImages: sourceDataset.labeledImages,
-      unlabeledImages: sourceDataset.unlabeledImages,
-      trainCount: sourceDataset.trainCount,
-      valCount: sourceDataset.valCount,
-      testCount: sourceDataset.testCount,
-      thumbnailsGenerated: sourceDataset.thumbnailsGenerated,
-      labelSource: getLabelSource(sourceDataset),
-      isAugmented: false,
       isActive: false,
-      parentDatasetId: sourceDataset._id,
-      rootDatasetId: sourceDataset.rootDatasetId || sourceDataset._id,
-      split_seed: sourceDataset.split_seed,
-      split_ratio_train: sourceDataset.split_ratio_train,
-      split_ratio_val: sourceDataset.split_ratio_val,
-      test_sample_ratio: sourceDataset.test_sample_ratio,
     });
-    await newDataset.save();
-
-    // Duplicate Category documents first — Annotation.categoryId must point at the new copies
-    const sourceCategories = await Category.find({ datasetId: sourceDataset._id }).lean();
-    const categoryIdMap = new Map();
-    if (sourceCategories.length > 0) {
-      const newCategoryDocs = sourceCategories.map((c) => {
-        const newId = new mongoose.Types.ObjectId();
-        categoryIdMap.set(String(c._id), newId);
-        const { _id, ...rest } = c;
-        return { ...rest, _id: newId, datasetId: newDataset._id };
-      });
-      await Category.insertMany(newCategoryDocs);
-    }
-
-    // Duplicate Image documents, remapped to the new dataset
-    const sourceImages = await Image.find({ datasetId: sourceDataset._id }).lean();
-    const imageIdMap = new Map();
-    if (sourceImages.length > 0) {
-      const newImageDocs = sourceImages.map((img) => {
-        const newId = new mongoose.Types.ObjectId();
-        imageIdMap.set(String(img._id), newId);
-        const { _id, ...rest } = img;
-        return { ...rest, _id: newId, datasetId: newDataset._id };
-      });
-      await Image.insertMany(newImageDocs);
-    }
-
-    // Duplicate Annotation documents, remapped to the new images/categories
-    const sourceAnnotations = await Annotation.find({
-      datasetId: sourceDataset._id,
-      deletedAt: null,
-    }).lean();
-    if (sourceAnnotations.length > 0) {
-      const newAnnotationDocs = sourceAnnotations
-        .filter((a) => imageIdMap.has(String(a.imageId)) && categoryIdMap.has(String(a.categoryId)))
-        .map((a) => {
-          const { _id, ...rest } = a;
-          return {
-            ...rest,
-            _id: new mongoose.Types.ObjectId(),
-            datasetId: newDataset._id,
-            imageId: imageIdMap.get(String(a.imageId)),
-            categoryId: categoryIdMap.get(String(a.categoryId)),
-          };
-        });
-      if (newAnnotationDocs.length > 0) {
-        await Annotation.insertMany(newAnnotationDocs);
-      }
-    }
 
     console.log('[DUPLICATE] dataset_duplicated', {
       sourceDatasetId: sourceDataset._id.toString(),
       sourceVersion: sourceDataset.version,
       newDatasetId: newDataset._id.toString(),
       newVersion: versionName,
-      images: sourceImages.length,
-      categories: sourceCategories.length,
+      images,
+      categories,
     });
 
     return res.status(201).json({

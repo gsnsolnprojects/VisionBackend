@@ -17,7 +17,9 @@ const projectRoutes = require('./routes/projects');
 const demoExtinguisherRoutes = require('./routes/demoExtinguisherRoutes');
 const subscriptionRoutes = require('./routes/subscription');
 const adminRoutes = require('./routes/admin');
+const sampleRoutes = require('./routes/samples');
 const { authenticateToken } = require('./middleware/authMiddleware');
+const { requirePlanForWork } = require('./middleware/planAccessMiddleware');
 const dns = require('dns');
 
 dns.setServers(['8.8.8.8', '1.1.1.1']);
@@ -83,6 +85,10 @@ app.use('/api', (req, res, next) => {
   // Apply authentication middleware
   authenticateToken(req, res, next);
 });
+
+// ✅ Plan access: creating / running work (upload, label, train, inference, samples)
+// needs an active plan; viewing and stopping jobs stay allowed
+app.use('/api', requirePlanForWork);
 
 // ✅ Request logging middleware (for debugging)
 app.use((req, res, next) => {
@@ -150,6 +156,10 @@ app.use('/api/subscription', subscriptionRoutes);
 // ✅ Register superadmin panel routes (GSN platform admin only)
 // All routes in routes/admin.js will be prefixed with /api/admin
 app.use('/api/admin', adminRoutes);
+
+// ✅ Register sample library routes (GSN sample datasets and models, Playground)
+// All routes in routes/samples.js will be prefixed with /api/samples
+app.use('/api/samples', sampleRoutes);
 
 // ✅ Register temporary extinguisher OCR demo routes
 // All routes in routes/demoExtinguisherRoutes.js will be prefixed with /api/demo/extinguisher

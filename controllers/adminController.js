@@ -17,6 +17,7 @@ const razorpay = require('../services/razorpayService');
 const auditService = require('../services/auditService');
 const { PLANS } = require('../utils/plans');
 const { invalidateUserCache, invalidateCompanyCache } = require('../middleware/authMiddleware');
+const { removeLibraryEntriesForDatasets } = require('../services/sampleLibraryService');
 
 /**
  * Superadmin (GSN platform admin) panel
@@ -545,6 +546,7 @@ const deleteCompany = async (req, res) => {
     // 4) MongoDB data (audit log is kept as history)
     const datasetIds = (await Dataset.find({ company: companyName }).select('_id').lean()).map((d) => d._id);
     const mongo = {};
+    mongo.sampleLibraryEntries = await removeLibraryEntriesForDatasets(datasetIds);
     mongo.images = (await Image.deleteMany({ datasetId: { $in: datasetIds } })).deletedCount;
     mongo.annotations = (await Annotation.deleteMany({ datasetId: { $in: datasetIds } })).deletedCount;
     mongo.categories = (await Category.deleteMany({ datasetId: { $in: datasetIds } })).deletedCount;

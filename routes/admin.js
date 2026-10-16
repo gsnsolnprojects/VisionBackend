@@ -14,6 +14,17 @@ const {
   listJobs,
   listAudit,
 } = require('../controllers/adminController');
+const {
+  listLibrary,
+  addToLibrary,
+  addAllToLibrary,
+  updateLibraryItem,
+  deleteLibraryItem,
+  getProjectPlaygroundStatus,
+  setProjectPlayground,
+  getDatasetPlaygroundStatus,
+  setDatasetPlayground,
+} = require('../controllers/adminSampleLibraryController');
 
 /**
  * Superadmin Routes (GSN platform admin only)
@@ -28,6 +39,11 @@ const {
  * GET    /api/admin/revenue
  * GET    /api/admin/jobs
  * GET    /api/admin/audit
+ * GET    /api/admin/sample-library
+ * POST   /api/admin/sample-library
+ * POST   /api/admin/sample-library/add-all
+ * PATCH  /api/admin/sample-library/:itemId
+ * DELETE /api/admin/sample-library/:itemId
  */
 router.use(authenticateToken, requireSuperadmin);
 
@@ -41,5 +57,16 @@ router.delete('/companies/:companyId', deleteCompany);
 router.get('/revenue', getRevenue);
 router.get('/jobs', listJobs);
 router.get('/audit', listAudit);
+
+// Playground sample dataset library
+router.get('/sample-library', listLibrary);
+router.post('/sample-library', addToLibrary);
+router.post('/sample-library/add-all', addAllToLibrary);
+router.get('/sample-library/projects', getProjectPlaygroundStatus);
+router.post('/sample-library/projects/playground', setProjectPlayground);
+router.get('/sample-library/datasets', getDatasetPlaygroundStatus);
+router.post('/sample-library/datasets/:datasetId/playground', setDatasetPlayground);
+router.patch('/sample-library/:itemId', updateLibraryItem);
+router.delete('/sample-library/:itemId', deleteLibraryItem);
 
 module.exports = router;
