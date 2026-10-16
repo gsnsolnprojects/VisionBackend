@@ -140,6 +140,15 @@ const modelSchema = new mongoose.Schema({
   // Chart data paths (for frontend visualization)
   chartDataPath: {
     type: String // Path to metrics directory with JSON files
+  },
+
+  // Linked sample model: points at GSN's original model (same folder, nothing copied).
+  // Deleting a linked model removes only this record, never the shared files.
+  linkedFrom: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Model',
+    default: null,
+    index: true
   }
 }, {
   timestamps: true // Automatically adds createdAt and updatedAt

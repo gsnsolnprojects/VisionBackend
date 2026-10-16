@@ -386,6 +386,20 @@ const deleteProject = async (req, res) => {
       (await M.distinct('project', filter)).forEach((name) => storedNames.add(name));
     }
 
+    // Pre-check: customers' linked samples still point at this project's datasets or models
+    const [ownDatasetIds, ownModelIds] = await Promise.all([
+      Dataset.find({ ...filter, linkedFrom: null }).distinct('_id'),
+      Model.find({ ...filter, linkedFrom: null }).distinct('_id'),
+    ]);
+    const [linkedDatasets, linkedModels] = await Promise.all([
+      Dataset.countDocuments({ linkedFrom: { $in: ownDatasetIds }, deletedAt: null }),
+      Model.countDocuments({ linkedFrom: { $in: ownModelIds } }),
+    ]);
+    if (linkedDatasets + linkedModels > 0) {
+      const message = `Customers use ${linkedDatasets + linkedModels} sample dataset/model${linkedDatasets + linkedModels === 1 ? '' : 's'} from this project, so it can't be deleted yet.`;
+      return res.status(409).json({ error: message, message });
+    }
+
     // Pre-check: no active datasets (processing/queued)
     const activeDatasets = await Dataset.countDocuments({
       ...filter,
@@ -453,9 +467,10 @@ const deleteProject = async (req, res) => {
     const inferenceResult = await InferenceJob.deleteMany(filter);
     deleted.inferenceJobs = inferenceResult.deletedCount || 0;
 
-    // 2. Delete models (storage + document)
+    // 2. Delete models (storage + document). Linked sample models use GSN's folder: record only.
     const models = await Model.find(filter).lean();
     for (const model of models) {
+      if (model.linkedFrom) continue;
       if (model.storagePath && fs.existsSync(fsPath(model.storagePath))) {
         try {
           fs.rmSync(fsPath(model.storagePath), { recursive: true, force: true });
@@ -492,7 +507,8 @@ const deleteProject = async (req, res) => {
       if (dataset.status === 'processing' || dataset.status === 'queued') {
         continue; // Should not happen due to pre-check
       }
-      if (dataset.storagePath && fs.existsSync(fsPath(dataset.storagePath))) {
+      // Linked sample datasets point at GSN's shared folder: only the record goes
+      if (!dataset.linkedFrom && dataset.storagePath && fs.existsSync(fsPath(dataset.storagePath))) {
         try {
           fs.rmSync(fsPath(dataset.storagePath), { recursive: true, force: true });
         } catch (e) {

@@ -3,7 +3,6 @@ const fs = require('fs');
 const Dataset = require('../models/Dataset');
 const Model = require('../models/Model');
 const SampleLibraryItem = require('../models/SampleLibraryItem');
-const storageAdapter = require('../services/storageAdapter');
 const { copyDataset } = require('../services/datasetCopyService');
 const { getSupabaseClient } = require('../services/supabaseService');
 const auditService = require('../services/auditService');
@@ -15,9 +14,10 @@ const { SAMPLE_COMPANY, readyGsnDatasetFilter, isOnThisServer } = require('../se
  * Datasets: the superadmin-curated library (SampleLibraryItem -> a GSN dataset), with
  * display name, industry and description; only visible entries are offered.
  * Models: GSN's own trained models.
- * "Adding" one makes a full, independent copy inside the caller's company + project,
- * so it then shows up in Model Training / Testing & Inference like any other data,
- * and GSN's originals are only ever read.
+ * "Adding" one creates a read-only link inside the caller's company + project (the
+ * records are copied, the files are not: it uses GSN's folder), so it shows up in Model
+ * Training / Testing & Inference like any other data, every customer shares one copy on
+ * disk, and GSN's originals are only ever read.
  *
  * GET  /api/samples                              - list sample datasets and models
  * POST /api/samples/datasets/:datasetId/import   { project }
@@ -145,6 +145,21 @@ const importSampleDataset = async (req, res) => {
       return res.status(404).json({ error: 'Not found', message: 'This sample dataset is no longer available' });
     }
 
+    const already = await Dataset.findOne({
+      company: target.company,
+      project: target.project,
+      linkedFrom: source._id,
+      deletedAt: null,
+    })
+      .select('version')
+      .lean();
+    if (already) {
+      return res.status(409).json({
+        error: 'Already added',
+        message: `This sample is already in ${target.project} as "${already.version}"`,
+      });
+    }
+
     const version = await uniqueName(toSafeName(item.name, toSafeName(source.version, 'sample')), async (name) =>
       !!(await Dataset.exists({ company: target.company, project: target.project, version: name, deletedAt: null }))
     );
@@ -161,6 +176,7 @@ const importSampleDataset = async (req, res) => {
       project: target.project,
       version,
       isActive: !hasActive,
+      link: true,
     });
 
     auditService.logAction({
@@ -251,14 +267,6 @@ const getSampleDatasetThumbnail = async (req, res) => {
   }
 };
 
-/** Point a path inside the source model folder at the same file inside the copy */
-function remapPath(filePath, fromDir, toDir) {
-  if (!filePath) return filePath;
-  const relative = path.relative(fromDir, filePath);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) return path.join(toDir, path.basename(filePath));
-  return path.join(toDir, relative);
-}
-
 /**
  * POST /api/samples/models/:modelId/import  { project }
  */
@@ -272,20 +280,25 @@ const importSampleModel = async (req, res) => {
       return res.status(404).json({ error: 'Not found', message: 'Sample model not found' });
     }
 
+    const already = await Model.findOne({ company: target.company, project: target.project, linkedFrom: source._id })
+      .select('modelVersion')
+      .lean();
+    if (already) {
+      return res.status(409).json({
+        error: 'Already added',
+        message: `This sample model is already in ${target.project} as "${already.modelVersion}"`,
+      });
+    }
+
     const modelVersion = await uniqueName(toSafeName(source.modelVersion, 'sample-model'), async (name) => {
       const inDb = await Model.exists({ company: target.company, project: target.project, modelVersion: name });
       const onDisk = fs.existsSync(path.join(process.cwd(), 'models', target.company, target.project, name));
       return !!inDb || onDisk;
     });
 
-    // Same folder layout the training worker uses: models/{company}/{project}/{modelVersion}
-    const storagePath = path.join(process.cwd(), 'models', target.company, target.project, modelVersion);
-    await storageAdapter.copyDirectory(source.storagePath, storagePath);
-
-    const bestCheckpointPath = remapPath(source.bestCheckpointPath, source.storagePath, storagePath);
-    if (!fs.existsSync(bestCheckpointPath)) {
-      throw new Error('Model weights were not copied correctly');
-    }
+    // A read-only link: it uses GSN's model folder and weights, nothing is copied
+    const storagePath = source.storagePath;
+    const bestCheckpointPath = source.bestCheckpointPath;
 
     const model = await Model.create({
       modelId: `model_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
@@ -300,7 +313,8 @@ const importSampleModel = async (req, res) => {
       insights: source.insights,
       storagePath,
       bestCheckpointPath,
-      chartDataPath: remapPath(source.chartDataPath, source.storagePath, storagePath),
+      chartDataPath: source.chartDataPath,
+      linkedFrom: source._id,
     });
 
     auditService.logAction({

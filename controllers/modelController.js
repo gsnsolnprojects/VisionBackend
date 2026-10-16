@@ -697,9 +697,22 @@ const deleteModel = async (req, res) => {
       }
     }
 
+    // ✅ A GSN sample model that customers still use can't be deleted
+    const links = await Model.countDocuments({ linkedFrom: model._id });
+    if (links > 0) {
+      const message = `${links} customer project${links === 1 ? ' uses' : 's use'} this model as a sample, so it can't be deleted.`;
+      return res.status(409).json({ error: message, message });
+    }
+
+    // ✅ Keep the files when they aren't this record's alone: a linked sample model uses
+    // GSN's folder, and some records share one folder (e.g. the same training registered twice)
+    const folderShared =
+      !!model.linkedFrom ||
+      !!(model.storagePath && (await Model.exists({ _id: { $ne: model._id }, storagePath: model.storagePath })));
+
     // ✅ Delete storage folder from disk if it exists
     // The storagePath contains the entire model directory with checkpoints, charts, etc.
-    if (model.storagePath && fs.existsSync(model.storagePath)) {
+    if (!folderShared && model.storagePath && fs.existsSync(model.storagePath)) {
       try {
         // Use fs.rmSync with recursive option (Node.js 14+)
         // This deletes the entire model directory including:
@@ -715,7 +728,7 @@ const deleteModel = async (req, res) => {
     }
 
     // ✅ Delete chart data folder if it's separate from storagePath
-    if (model.chartDataPath && model.chartDataPath !== model.storagePath && fs.existsSync(model.chartDataPath)) {
+    if (!folderShared && model.chartDataPath && model.chartDataPath !== model.storagePath && fs.existsSync(model.chartDataPath)) {
       try {
         fs.rmSync(model.chartDataPath, { recursive: true, force: true });
         console.log(`✅ Deleted chart data folder: ${model.chartDataPath}`);

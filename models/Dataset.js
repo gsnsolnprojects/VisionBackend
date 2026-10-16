@@ -208,6 +208,15 @@ const datasetSchema = new mongoose.Schema({
     index: true // Indexed for faster queries to filter deleted datasets
   },
 
+  // Linked sample dataset: points at GSN's original dataset (storagePath is GSN's folder,
+  // nothing copied). Read-only: deleting it removes only this record, never the files.
+  linkedFrom: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Dataset',
+    default: null,
+    index: true
+  },
+
   // Superadmin's pick of datasets to copy to the live (AWS) setup; only used locally
   publishToLive: {
     type: Boolean,

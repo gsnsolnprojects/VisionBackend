@@ -71,6 +71,13 @@ async function deleteDatasetPermanently(dataset) {
   if (dataset.augmentationStatus === 'running') {
     throw Object.assign(new Error('Augmentation is running on this dataset. Cancel it first.'), { status: 409 });
   }
+  const links = await Dataset.countDocuments({ linkedFrom: dataset._id, deletedAt: null });
+  if (links > 0) {
+    throw Object.assign(
+      new Error(`${links} customer project${links === 1 ? ' uses' : 's use'} this sample dataset, so its files can't be deleted. Hide it instead.`),
+      { status: 409 }
+    );
+  }
 
   if (dataset.storagePath) {
     const folder = path.resolve(dataset.storagePath);

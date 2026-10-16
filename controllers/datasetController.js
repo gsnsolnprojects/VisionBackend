@@ -829,7 +829,8 @@ const getDatasetStatus = async (req, res) => {
     let totalImages = dataset.totalImages;
     if (dataset.status !== 'queued' && dataset.status !== 'processing') {
       let moved = 0;
-      if (await datasetAlreadyHasSplit(dataset)) {
+      // Never tidy a linked sample dataset: its folder is GSN's shared copy
+      if (!dataset.linkedFrom && (await datasetAlreadyHasSplit(dataset))) {
         moved = await relocateNonSplitImagesToTrain(dataset);
         if (moved > 0) {
           await syncManifestFoldersFromImageIndex(dataset);
@@ -1538,6 +1539,36 @@ const updateDataset = async (req, res) => {
  * Soft delete dataset: Delete files but keep MongoDB document
  * References in models/inference jobs will remain but show "Dataset deleted" status
  */
+/** Linked sample datasets (in customer projects) that still point at this dataset */
+const countActiveLinks = (datasetId) => Dataset.countDocuments({ linkedFrom: datasetId, deletedAt: null });
+
+/**
+ * Delete a dataset's files on disk. A linked sample dataset shares GSN's folder, so only
+ * its record goes; a dataset that customers still link to is refused (409); and nothing
+ * outside the datasets folder is ever removed.
+ * @returns {Promise<{ deleted: boolean, status?: number, error?: string }>}
+ */
+async function deleteDatasetFiles(dataset) {
+  if (dataset.linkedFrom) return { deleted: true };
+
+  const links = await countActiveLinks(dataset._id);
+  if (links > 0) {
+    return {
+      deleted: false,
+      status: 409,
+      error: `${links} customer project${links === 1 ? ' uses' : 's use'} this dataset as a sample, so it can't be deleted. Hide it in the sample library instead.`,
+    };
+  }
+
+  const dir = path.resolve(storageAdapter.datasetRoot(dataset));
+  const base = path.resolve(storageAdapter.getBasePath());
+  if (!dir.startsWith(base + path.sep)) {
+    console.warn(`[DELETE] Not deleting files outside the datasets folder: ${dir}`);
+    return { deleted: true };
+  }
+  return storageAdapter.deleteDirectory(dir);
+}
+
 const deleteDataset = async (req, res) => {
   try {
     const { datasetId } = req.params;
@@ -1614,7 +1645,10 @@ const deleteDataset = async (req, res) => {
 
     // ✅ Delete files from storage (local or Azure via adapter)
     const dirPathToDelete = path.normalize(storageAdapter.datasetRoot(dataset));
-    const deleteResult = await storageAdapter.deleteDirectory(dirPathToDelete);
+    const deleteResult = await deleteDatasetFiles(dataset);
+    if (deleteResult.status === 409) {
+      return res.status(409).json({ error: deleteResult.error, message: deleteResult.error });
+    }
 
     if (!deleteResult.deleted) {
       console.error(`[DELETE] Failed to delete dataset files: ${deleteResult.error}`, { dirPath: dirPathToDelete });
@@ -1772,7 +1806,10 @@ const deleteDatasetByVersion = async (req, res) => {
 
     // ✅ Delete files from storage (local or Azure via adapter)
     const dirPathToDelete = path.normalize(storageAdapter.datasetRoot(dataset));
-    const deleteResult = await storageAdapter.deleteDirectory(dirPathToDelete);
+    const deleteResult = await deleteDatasetFiles(dataset);
+    if (deleteResult.status === 409) {
+      return res.status(409).json({ error: deleteResult.error, message: deleteResult.error });
+    }
 
     if (!deleteResult.deleted) {
       console.error(`[DELETE] Failed to delete dataset files (by version): ${deleteResult.error}`, { dirPath: dirPathToDelete });

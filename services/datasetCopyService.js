@@ -27,13 +27,23 @@ function getLabelSource(dataset) {
  * Files are copied before any record is written, so a disk failure never leaves a
  * half-created dataset behind.
  *
+ * With `link: true` no files are copied: the new dataset is a read-only link whose
+ * storagePath is the source's own folder (linkedFrom = source). Used for GSN sample
+ * datasets, so every customer shares one copy on disk. The records are still copied,
+ * so viewing and training work exactly as for any other dataset.
+ *
  * @param {Document} sourceDataset - Dataset document to copy
- * @param {{ company: string, project: string, version: string, isActive?: boolean }} target
+ * @param {{ company: string, project: string, version: string, isActive?: boolean, link?: boolean }} target
  * @returns {Promise<{ dataset: Document, images: number, categories: number, annotations: number }>}
  */
-async function copyDataset(sourceDataset, { company, project, version, isActive = false }) {
-  const newStoragePath = storageAdapter.buildDatasetPath(company, project, version);
-  await storageAdapter.copyDirectory(sourceDataset.storagePath, newStoragePath);
+async function copyDataset(sourceDataset, { company, project, version, isActive = false, link = false }) {
+  let newStoragePath;
+  if (link) {
+    newStoragePath = sourceDataset.storagePath;
+  } else {
+    newStoragePath = storageAdapter.buildDatasetPath(company, project, version);
+    await storageAdapter.copyDirectory(sourceDataset.storagePath, newStoragePath);
+  }
 
   const newDataset = new Dataset({
     company,
@@ -62,6 +72,7 @@ async function copyDataset(sourceDataset, { company, project, version, isActive 
     isAugmented: false,
     isActive,
     parentDatasetId: sourceDataset._id,
+    linkedFrom: link ? sourceDataset._id : null,
     rootDatasetId: sourceDataset.rootDatasetId || sourceDataset._id,
     split_seed: sourceDataset.split_seed,
     split_ratio_train: sourceDataset.split_ratio_train,
