@@ -1,0 +1,36 @@
+# Live API server on EC2: the API container plus Redis for the job queue.
+#
+#   API_IMAGE  the image to run (ECR URL:tag), set in /srv/vision/.env next to this file
+#   api.env    settings and secrets, written from AWS Parameter Store by load-secrets.sh
+#
+# Data (datasets, trained models, results, uploads) lives in /srv/vision/data on the
+# server's disk and survives image updates. Both containers restart on their own.
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - /srv/vision/redis:/data
+    restart: unless-stopped
+
+  api:
+    image: ${API_IMAGE}
+    env_file: /srv/vision/api.env
+    environment:
+      PORT: "3000"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      STORAGE_MODE: local
+    volumes:
+      - /srv/vision/data:/data
+    ports:
+      - "80:3000"
+    depends_on:
+      - redis
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

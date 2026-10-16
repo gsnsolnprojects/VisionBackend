@@ -11,7 +11,8 @@ ENV NODE_ENV=production \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     VIRTUAL_ENV=/opt/venv \
-    PATH=/opt/venv/bin:$PATH
+    PATH=/opt/venv/bin:$PATH \
+    YOLO_CONFIG_DIR=/data/.ultralytics
 
 # Python for the API's own scripts; libgl1 / libglib2.0-0 are needed by OpenCV
 RUN apt-get update \
