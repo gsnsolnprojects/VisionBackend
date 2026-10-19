@@ -44,9 +44,12 @@ async function askAI(provider, question, context, source) {
 
     const safeProvider = selectedProvider || 'unknown';
 
+    const tookTooLong = String(error.message || '').startsWith('The AI took too long');
     return {
       success: false,
-      answer: `The AI assistant (${safeProvider}) is currently unavailable. Please try again later.`,
+      answer: tookTooLong
+        ? error.message
+        : `The AI assistant (${safeProvider}) is currently unavailable. Please try again later.`,
       provider: safeProvider
     };
   }

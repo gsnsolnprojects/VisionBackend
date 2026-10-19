@@ -1044,6 +1044,17 @@ const getDatasetFiles = async (req, res) => {
       });
     }
 
+    // Only the dataset's own company (or the platform admin) may see its files
+    if (!canAccessAllWorkspaces(req.user)) {
+      const accessValidation = validateWorkspaceAccess(req.user, dataset.company);
+      if (!accessValidation.allowed) {
+        return res.status(403).json({
+          error: 'Permission denied',
+          message: accessValidation.error || 'You do not have access to this dataset'
+        });
+      }
+    }
+
     // ✅ Filter files
     let files = [...dataset.files];
     
@@ -1120,6 +1131,17 @@ const getFileThumbnail = async (req, res) => {
       return res.status(404).json({
         error: 'Dataset not found'
       });
+    }
+
+    // Only the dataset's own company (or the platform admin) may see its files
+    if (!canAccessAllWorkspaces(req.user)) {
+      const accessValidation = validateWorkspaceAccess(req.user, dataset.company);
+      if (!accessValidation.allowed) {
+        return res.status(403).json({
+          error: 'Permission denied',
+          message: accessValidation.error || 'You do not have access to this dataset'
+        });
+      }
     }
 
     // ✅ Decode fileId (Express should decode, but be safe)
@@ -1257,6 +1279,17 @@ const getFile = async (req, res) => {
       return res.status(404).json({
         error: 'Dataset not found'
       });
+    }
+
+    // Only the dataset's own company (or the platform admin) may see its files
+    if (!canAccessAllWorkspaces(req.user)) {
+      const accessValidation = validateWorkspaceAccess(req.user, dataset.company);
+      if (!accessValidation.allowed) {
+        return res.status(403).json({
+          error: 'Permission denied',
+          message: accessValidation.error || 'You do not have access to this dataset'
+        });
+      }
     }
 
     // ✅ Decode fileId (Express should decode, but be safe)

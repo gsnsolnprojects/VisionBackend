@@ -21,6 +21,7 @@ const sampleRoutes = require('./routes/samples');
 const { authenticateToken } = require('./middleware/authMiddleware');
 const { requirePlanForWork } = require('./middleware/planAccessMiddleware');
 const { customerAccess } = require('./middleware/customerAccessMiddleware');
+const { datasetAccess } = require('./middleware/datasetAccessMiddleware');
 const dns = require('dns');
 
 dns.setServers(['8.8.8.8', '1.1.1.1']);
@@ -105,6 +106,9 @@ app.use((req, res, next) => {
   });
   next();
 });
+
+// ✅ Company check for every /api/dataset/:datasetId/... route (files, images, annotations, categories)
+app.use('/api/dataset/:datasetId', datasetAccess);
 
 // ✅ Register annotation routes FIRST
 // All routes in routes/annotations.js will be prefixed with /api/dataset

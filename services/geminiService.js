@@ -11,7 +11,11 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const API_KEY = process.env.GEMINI_API_KEY;
 const MODEL_NAME = process.env.GEMINI_MODEL || 'gemini-pro';
 const TEMPERATURE = parseFloat(process.env.GEMINI_TEMPERATURE || '0.2');
-const MAX_TOKENS = parseInt(process.env.GEMINI_MAX_TOKENS || '1000', 10);
+// Answers are short explanations; a large limit only makes slow answers that the live
+// setup (CloudFront, 60 s per request) cuts off. Capped whatever GEMINI_MAX_TOKENS says.
+const MAX_TOKENS = Math.min(parseInt(process.env.GEMINI_MAX_TOKENS || '2048', 10) || 2048, 4096);
+// Give up before CloudFront's 60 s limit so the user gets a clear message instead of a timeout
+const GEMINI_TIMEOUT_MS = 45000;
 
 let genAI = null;
 if (API_KEY) {
@@ -138,23 +142,33 @@ async function askGemini(question, context, source) {
   try {
     const model = genAI.getGenerativeModel({ model: MODEL_NAME });
 
-    const result = await model.generateContent({
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: prompt }]
-        }
-      ],
-      generationConfig: {
-        temperature: TEMPERATURE,
-        maxOutputTokens: MAX_TOKENS
-      }
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('timeout')), GEMINI_TIMEOUT_MS);
     });
+    const result = await Promise.race([
+      model.generateContent({
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: prompt }]
+          }
+        ],
+        generationConfig: {
+          temperature: TEMPERATURE,
+          maxOutputTokens: MAX_TOKENS
+        }
+      }),
+      timeout,
+    ]).finally(() => clearTimeout(timer));
 
     const text = result?.response?.text?.() || '';
     return filterResponse(text);
   } catch (error) {
     console.error('Error calling Gemini:', error.message || error);
+    if (error.message === 'timeout') {
+      throw new Error('The AI took too long to answer. Please try again.');
+    }
     throw new Error('Gemini is not available right now.');
   }
 }
