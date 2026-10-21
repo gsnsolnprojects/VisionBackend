@@ -105,6 +105,24 @@ def save_mask_only_image(result, dest_path, alpha=0.45):
     return bool(cv2.imwrite(dest_path, img, params))
 
 
+def save_box_image(result, dest_path):
+    """Write YOLO's standard picture (boxes + class + confidence) for a detection model result."""
+    if cv2 is None:
+        return False
+    try:
+        img = result.plot()  # BGR array with boxes and labels drawn
+    except Exception as e:
+        print(f"⚠️ Could not draw boxes: {e}", file=sys.stderr)
+        return False
+    dest_dir = os.path.dirname(dest_path)
+    if dest_dir:
+        os.makedirs(dest_dir, exist_ok=True)
+    params = []
+    if dest_path.lower().endswith(('.jpg', '.jpeg')):
+        params = [int(cv2.IMWRITE_JPEG_QUALITY), 85]
+    return bool(cv2.imwrite(dest_path, img, params))
+
+
 def compute_corrosion_coverage(result, file_detections):
     """
     Union of instance masks as % of image pixels.
@@ -373,16 +391,18 @@ def run_inference(config):
         print("-" * 80)
         sys.stdout.flush()
 
-        # Image-only jobs: do not let YOLO write default plots (boxes/labels).
-        # We write the mask overlay ourselves once. save=True on images = double JPEG write.
+        # Image-only jobs: do not let YOLO write its own plots; we write each picture once
+        # ourselves (mask-only overlay for segmentation, boxes for detection).
         image_only = (not is_video_file) and (not has_videos)
+        # Segmentation models are drawn as masks without boxes; detection models keep their boxes
+        is_segmentation = getattr(model, 'task', None) == 'segment'
         annotated_dir = os.path.join(output, 'annotated')
         os.makedirs(annotated_dir, exist_ok=True)
 
         # ✅ Run inference
         # YOLO's predict() method can handle images, videos, and folders
         # For videos: saves annotated videos to {output}/annotated/
-        # boxes=False: do not draw detection rectangles (ultralytics 8.1+)
+        # boxes=False (segmentation only): do not draw rectangles over the masks (ultralytics 8.1+)
         predict_kwargs = dict(
             source=source_for_inference,
             save=not image_only,
@@ -393,12 +413,13 @@ def run_inference(config):
             exist_ok=True,
             verbose=False,
         )
+        box_kwargs = {'boxes': False} if is_segmentation else {}
         try:
-            results = model.predict(**predict_kwargs, boxes=False)
+            results = model.predict(**predict_kwargs, **box_kwargs)
         except TypeError:
             predict_kwargs.pop('verbose', None)
             try:
-                results = model.predict(**predict_kwargs, boxes=False)
+                results = model.predict(**predict_kwargs, **box_kwargs)
             except TypeError:
                 results = model.predict(**predict_kwargs)
 
@@ -573,17 +594,20 @@ def run_inference(config):
                     file_info['imageWidth'] = coverage['imageWidth']
                     file_info['imageHeight'] = coverage['imageHeight']
                     file_info['instanceCount'] = coverage['instanceCount']
-                # Segmentation results get the mask-only picture (no boxes). Detection models have no
-                # masks, so keep YOLO's own picture with the boxes instead of overwriting it.
-                has_masks = getattr(result, "masks", None) is not None
-                if has_masks:
-                    annotated_image_path = os.path.join(annotated_dir, saved_file_name)
-                    if save_mask_only_image(result, annotated_image_path):
-                        print(f"🎨 Mask-only overlay saved: {saved_file_name}")
-                        sys.stdout.flush()
-                    else:
-                        print(f"⚠️ Could not rewrite mask-only overlay for {saved_file_name}", file=sys.stderr)
-                        sys.stdout.flush()
+                # We write every result picture: segmentation -> mask-only overlay (no boxes),
+                # detection -> YOLO's standard picture with boxes and labels
+                annotated_image_path = os.path.join(annotated_dir, saved_file_name)
+                if is_segmentation:
+                    saved_ok = save_mask_only_image(result, annotated_image_path)
+                    style = "Mask-only overlay"
+                else:
+                    saved_ok = save_box_image(result, annotated_image_path)
+                    style = "Box overlay"
+                if saved_ok:
+                    print(f"🎨 {style} saved: {saved_file_name}")
+                else:
+                    print(f"⚠️ Could not save {style.lower()} for {saved_file_name}", file=sys.stderr)
+                sys.stdout.flush()
             
             all_detections.append(file_info)
             
