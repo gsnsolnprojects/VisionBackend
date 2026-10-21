@@ -573,13 +573,17 @@ def run_inference(config):
                     file_info['imageWidth'] = coverage['imageWidth']
                     file_info['imageHeight'] = coverage['imageHeight']
                     file_info['instanceCount'] = coverage['instanceCount']
-                annotated_image_path = os.path.join(annotated_dir, saved_file_name)
-                if save_mask_only_image(result, annotated_image_path):
-                    print(f"🎨 Mask-only overlay saved: {saved_file_name}")
-                    sys.stdout.flush()
-                else:
-                    print(f"⚠️ Could not rewrite mask-only overlay for {saved_file_name}", file=sys.stderr)
-                    sys.stdout.flush()
+                # Segmentation results get the mask-only picture (no boxes). Detection models have no
+                # masks, so keep YOLO's own picture with the boxes instead of overwriting it.
+                has_masks = getattr(result, "masks", None) is not None
+                if has_masks:
+                    annotated_image_path = os.path.join(annotated_dir, saved_file_name)
+                    if save_mask_only_image(result, annotated_image_path):
+                        print(f"🎨 Mask-only overlay saved: {saved_file_name}")
+                        sys.stdout.flush()
+                    else:
+                        print(f"⚠️ Could not rewrite mask-only overlay for {saved_file_name}", file=sys.stderr)
+                        sys.stdout.flush()
             
             all_detections.append(file_info)
             
