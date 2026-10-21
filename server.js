@@ -45,15 +45,17 @@ app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use(express.urlencoded({ extended: true }));
 
 // --- production-safe CORS (replace existing CORS middleware) ---
-const allowedOrigin = process.env.CORS_ORIGIN || '*'; // set in Azure later
+// Comma-separated list of allowed web origins, or '*'
+const allowedOrigins = (process.env.CORS_ORIGIN || '*').split(',').map((o) => o.trim().replace(/\/+$/, '')).filter(Boolean);
+const allowAnyOrigin = allowedOrigins.includes('*');
 
 app.set('trust proxy', 1); // required for Azure behind proxy
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   // Native apps (Expo / Android) often send no Origin header.
-  if (!origin || allowedOrigin === '*' || origin === allowedOrigin) {
-    res.header('Access-Control-Allow-Origin', !origin || allowedOrigin === '*' ? '*' : origin);
+  if (!origin || allowAnyOrigin || allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', !origin || allowAnyOrigin ? '*' : origin);
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-User-Id, X-User-Role, X-User-Company, X-User-Email, X-User-Company-Id');
     res.header('Access-Control-Allow-Credentials', 'true');
