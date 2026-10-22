@@ -770,6 +770,7 @@ const listDatasets = async (req, res) => {
         rootDatasetId: d.rootDatasetId ? d.rootDatasetId.toString() : null,
         augmentedFromVersion: d.augmentedFromVersion || null,
         isLinkedSample: !!d.linkedFrom,
+        linkedFrom: d.linkedFrom ? d.linkedFrom.toString() : null, // the GSN sample it links to
         createdAt: d.createdAt,
         updatedAt: d.updatedAt
       });
