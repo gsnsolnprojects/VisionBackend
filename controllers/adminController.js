@@ -423,6 +423,8 @@ const listCompanies = async (req, res) => {
               isUnlimited: !!sub.is_unlimited,
               cancelAtPeriodEnd: !!sub.cancel_at_period_end,
               hasPaidSubscription: !!sub.razorpay_subscription_id,
+              // Playground given by the superadmin, without a Razorpay subscription
+              freePlayground: sub.plan === 'playground' && sub.status === 'active' && !sub.razorpay_subscription_id,
             }
           : null,
       };
@@ -470,6 +472,65 @@ const setCompanyUnlimited = async (req, res) => {
   } catch (error) {
     console.error('[admin] set unlimited failed:', error);
     res.status(500).json({ error: 'Could not change unlimited access', message: error.message });
+  }
+};
+
+/**
+ * PATCH /api/admin/companies/:companyId/playground  { granted: boolean }
+ * Gives a company the Playground plan without paying (no end date), or takes a free grant
+ * away again. Companies paying through Razorpay are left alone: their plan follows Razorpay.
+ */
+const setCompanyPlaygroundAccess = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { granted } = req.body || {};
+    if (typeof granted !== 'boolean') {
+      return res.status(400).json({ error: 'Invalid request', message: '"granted" must be true or false' });
+    }
+
+    const supabase = getSupabaseClient();
+    const company = unwrap(await supabase.from('companies').select('id, name').eq('id', companyId).maybeSingle());
+    if (!company) return res.status(404).json({ error: 'Not found', message: 'Company not found' });
+
+    const current = unwrap(
+      await supabase.from('company_subscriptions').select('*').eq('company_id', companyId).maybeSingle()
+    );
+    if (current?.razorpay_subscription_id && current.status === 'active') {
+      const message = `${company.name} pays for its plan through Razorpay, so it can't be changed here.`;
+      return res.status(409).json({ error: message, message });
+    }
+
+    const update = granted
+      ? {
+          company_id: companyId,
+          plan: 'playground',
+          status: 'active',
+          current_period_end: null,
+          cancel_at_period_end: false,
+          razorpay_subscription_id: null,
+        }
+      : { company_id: companyId, status: 'cancelled', current_period_end: null, cancel_at_period_end: false };
+
+    const { error } = await supabase.from('company_subscriptions').upsert(update, { onConflict: 'company_id' });
+    if (error) throw error;
+    invalidateCompanyCache(companyId);
+
+    auditService.logAction({
+      action: 'update',
+      resourceType: 'company',
+      resourceId: companyId,
+      details: {
+        company: company.name,
+        change: granted ? 'free Playground access on' : 'free Playground access off',
+        by: 'superadmin',
+      },
+      req,
+    });
+
+    res.json({ success: true, companyId, granted });
+  } catch (error) {
+    console.error('[admin] set playground access failed:', error);
+    res.status(500).json({ error: 'Could not change Playground access', message: error.message });
   }
 };
 
@@ -695,6 +756,7 @@ module.exports = {
   deleteUser,
   listCompanies,
   setCompanyUnlimited,
+  setCompanyPlaygroundAccess,
   deleteCompany,
   getRevenue,
   listJobs,

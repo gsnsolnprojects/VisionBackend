@@ -9,6 +9,7 @@ const {
   deleteUser,
   listCompanies,
   setCompanyUnlimited,
+  setCompanyPlaygroundAccess,
   deleteCompany,
   getRevenue,
   listJobs,
@@ -62,6 +63,7 @@ router.post('/users/:userId/status', setUserStatus);
 router.delete('/users/:userId', deleteUser);
 router.get('/companies', listCompanies);
 router.patch('/companies/:companyId/unlimited', setCompanyUnlimited);
+router.patch('/companies/:companyId/playground', setCompanyPlaygroundAccess);
 router.delete('/companies/:companyId', deleteCompany);
 router.get('/revenue', getRevenue);
 router.get('/jobs', listJobs);

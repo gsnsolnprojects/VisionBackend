@@ -8,8 +8,8 @@ const { countActiveLiveStreams } = require('../controllers/inferenceController')
  * active plan (req.user.access.mode === 'full', set by authMiddleware from the
  * company's subscription), and the plan's own limits:
  *  - no plan / payment stopped -> blocked ("choose a plan")
- *  - plans without trainOnOwnDatasets (Playground) -> can't upload their own datasets;
- *    they work with GSN sample datasets instead
+ *  - plans without trainOnOwnDatasets -> can't upload their own datasets; they work with
+ *    GSN sample datasets instead (dataset count/size limits: datasetAllowanceMiddleware)
  *  - live camera -> limited to the plan's liveCameraStreams
  *
  * Stopping work (cancel / stop) stays allowed, so a company that stops paying can still

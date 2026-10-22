@@ -11,6 +11,7 @@ const auditService = require('../services/auditService');
 const path = require('path');
 const { deleteProjectRow } = require('../services/supabaseService');
 const { removeLibraryEntriesForDatasets } = require('../services/sampleLibraryService');
+const { countStoredImages, countTrainingRunsThisMonth, countPredictionsThisMonth } = require('../utils/usage');
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -576,21 +577,32 @@ const deleteProject = async (req, res) => {
 
 /**
  * GET /api/dashboard/learning-progress
- * Counts behind the Playground learning path, for the caller's own company: datasets
- * (and how many are GSN sample links), own trained models, and finished predictions.
+ * Counts behind the Playground learning path and allowance meters, for the caller's own
+ * company: datasets (and how many are GSN sample links), own trained models, finished
+ * predictions, images stored in its own datasets, and this month's training runs and
+ * predicted images (see utils/usage.js).
  */
 const getLearningProgress = async (req, res) => {
   try {
     const company = req.user?.company;
-    if (!company) return res.json({ datasets: 0, sampleDatasets: 0, models: 0, predictions: 0 });
+    if (!company) {
+      return res.json({
+        datasets: 0, sampleDatasets: 0, models: 0, predictions: 0,
+        storedImages: 0, trainingRunsThisMonth: 0, predictionsThisMonth: 0,
+      });
+    }
 
-    const [datasets, sampleDatasets, models, predictions] = await Promise.all([
-      Dataset.countDocuments({ company, deletedAt: null }),
-      Dataset.countDocuments({ company, deletedAt: null, linkedFrom: { $ne: null } }),
-      Model.countDocuments({ company, linkedFrom: null }),
-      InferenceJob.countDocuments({ company, status: 'completed' }),
-    ]);
-    res.json({ datasets, sampleDatasets, models, predictions });
+    const [datasets, sampleDatasets, models, predictions, storedImages, trainingRunsThisMonth, predictionsThisMonth] =
+      await Promise.all([
+        Dataset.countDocuments({ company, deletedAt: null }),
+        Dataset.countDocuments({ company, deletedAt: null, linkedFrom: { $ne: null } }),
+        Model.countDocuments({ company, linkedFrom: null }),
+        InferenceJob.countDocuments({ company, status: 'completed' }),
+        countStoredImages(company),
+        countTrainingRunsThisMonth(company),
+        countPredictionsThisMonth(company),
+      ]);
+    res.json({ datasets, sampleDatasets, models, predictions, storedImages, trainingRunsThisMonth, predictionsThisMonth });
   } catch (error) {
     console.error('Error getting learning progress:', error);
     res.status(500).json({ error: 'Could not load learning progress', message: error.message });

@@ -15,6 +15,7 @@ const auditService = require('../services/auditService');
 const { buildWorkspaceFilter, validateWorkspaceAccess, canAccessAllWorkspaces } = require('../utils/workspaceScoping');
 const { resolveInferenceImagePath } = require('../utils/resolveInferenceImagePath');
 const { normalizeAssessment } = require('../utils/assessment');
+const { countPredictionsThisMonth } = require('../utils/usage');
 const fs = require('fs');
 const fsPromises = require('fs').promises;
 const path = require('path');
@@ -249,6 +250,22 @@ const startBatchInference = async (req, res) => {
       sourceType = 'test_folder';
       totalImages = dataset.testCount;
       datasetIdForJob = dataset._id.toString();
+    }
+
+    // Plan allowance: images predicted this month (Playground: 1,000)
+    const monthlyPredictions = req.user?.access?.limits?.predictionsPerMonth;
+    if (typeof monthlyPredictions === 'number') {
+      const requested = isCustomUpload ? uploadedImages.length : totalImages;
+      const used = await countPredictionsThisMonth(req.user.company);
+      if (used + requested > monthlyPredictions) {
+        await Promise.all(uploadedImages.map((f) => (f.path ? fsPromises.unlink(f.path).catch(() => {}) : null)));
+        const left = Math.max(0, monthlyPredictions - used);
+        const message =
+          left === 0
+            ? `Your plan includes ${monthlyPredictions.toLocaleString('en-IN')} image predictions a month, and you've used them all. They reset on the 1st.`
+            : `Your plan includes ${monthlyPredictions.toLocaleString('en-IN')} image predictions a month. You have ${left} left, and this needs ${requested}.`;
+        return res.status(403).json({ error: message, message, code: 'plan_prediction_limit' });
+      }
     }
 
     // ✅ Handle custom image/video upload

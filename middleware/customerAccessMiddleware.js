@@ -2,17 +2,21 @@ const mongoose = require('mongoose');
 const Dataset = require('../models/Dataset');
 const Model = require('../models/Model');
 const TrainingJob = require('../models/TrainingJob');
+const { countTrainingRunsThisMonth } = require('../utils/usage');
 
 /**
  * Customer access rules (everyone outside GSN)
  *
  * GSN (the superadmin and the GSN team) keeps every ability. Other companies work with
- * GSN's sample datasets, which they add to their projects as read-only links:
+ * GSN's sample datasets, which they add to their projects as read-only links, and - when
+ * their plan includes trainOnOwnDatasets - with datasets they upload themselves:
  *  - they can create projects, train models and run inference (also on uploaded images)
- *  - they can't upload datasets, add or delete dataset files, label, augment, duplicate
- *    or edit classes
+ *  - with trainOnOwnDatasets they can upload a dataset and add/delete its files, label it
+ *    and edit its classes (plan limits on count, images and file size: utils/datasetAllowance)
+ *  - they can't augment or duplicate datasets
  *  - they can train only nano or small models, at most CUSTOMER_MODEL_LIMIT per company
- *    (deleting a model frees its slot; linked sample models don't count)
+ *    (deleting a model frees its slot; linked sample models don't count), and no more than
+ *    the plan's trainingRunsPerMonth
  *
  * Independently of who is asking, a linked sample dataset is never changed in place:
  * its folder is GSN's shared copy.
@@ -28,9 +32,13 @@ const DATASET_ROUTE = /^\/api\/dataset\/([^/]+)(\/.*)?$/;
 
 /** Dataset requests only GSN may make (method + path after /api/dataset) */
 const GSN_ONLY = [
-  ['POST', /^\/upload$/],
   ['POST', /^\/[^/]+\/augment$/],
   ['POST', /^\/[^/]+\/duplicate$/],
+];
+
+/** Work on a company's own dataset, open to customers whose plan has trainOnOwnDatasets */
+const OWN_DATASET_WORK = [
+  ['POST', /^\/upload$/],
   ['POST', /^\/[^/]+\/create-categories-from-classes$/],
   ['POST', /^\/[^/]+\/files$/],
   ['DELETE', /^\/[^/]+\/files\/[^/]+$/],
@@ -52,6 +60,7 @@ const LINK_SAFE = [
   ['POST', /^\/[^/]+\/augment\/cancel$/],
 ];
 
+const GSN_ONLY_MESSAGE = 'Augmenting and duplicating datasets is not available in your workspace.';
 const SAMPLE_ONLY_MESSAGE =
   'Your workspace works with GSN sample datasets. Add one with "Add sample dataset"; uploading, labelling and editing datasets is not available.';
 const LINKED_READ_ONLY_MESSAGE =
@@ -83,8 +92,14 @@ async function customerAccess(req, res, next) {
     if (!route) return next();
     const subPath = urlPath.slice('/api/dataset'.length);
 
-    if (!isGsnUser(req.user) && matches(GSN_ONLY, req.method, subPath)) {
-      return res.status(403).json({ error: SAMPLE_ONLY_MESSAGE, message: SAMPLE_ONLY_MESSAGE, code: 'samples_only' });
+    if (!isGsnUser(req.user)) {
+      if (matches(GSN_ONLY, req.method, subPath)) {
+        return res.status(403).json({ error: GSN_ONLY_MESSAGE, message: GSN_ONLY_MESSAGE, code: 'gsn_only' });
+      }
+      const ownDatasets = req.user.access?.features?.trainOnOwnDatasets === true;
+      if (!ownDatasets && matches(OWN_DATASET_WORK, req.method, subPath)) {
+        return res.status(403).json({ error: SAMPLE_ONLY_MESSAGE, message: SAMPLE_ONLY_MESSAGE, code: 'samples_only' });
+      }
     }
 
     // Linked sample datasets are read-only for everyone
@@ -139,6 +154,14 @@ async function checkCustomerTraining(user, { modelType, modelSize, modelKey, bas
     return {
       status: 403,
       message: `Your workspace can keep ${CUSTOMER_MODEL_LIMIT} trained models. Delete one to train a new one.`,
+    };
+  }
+
+  const monthlyRuns = user.access?.limits?.trainingRunsPerMonth;
+  if (typeof monthlyRuns === 'number' && (await countTrainingRunsThisMonth(user.company)) >= monthlyRuns) {
+    return {
+      status: 403,
+      message: `Your plan includes ${monthlyRuns} training runs a month, and you've used them all. They reset on the 1st.`,
     };
   }
   return null;

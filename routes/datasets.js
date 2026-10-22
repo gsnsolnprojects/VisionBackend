@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const { authenticateToken } = require('../middleware/authMiddleware');
 const { requirePermission } = require('../middleware/authorizationMiddleware');
+const { enforceDatasetAllowance } = require('../middleware/datasetAllowanceMiddleware');
 
 const {
   uploadDataset,
@@ -127,6 +128,7 @@ router.post('/upload',
     }
     next();
   },
+  enforceDatasetAllowance('new'),
   uploadDataset
 );
 
@@ -240,6 +242,7 @@ router.post(
     }
     next();
   },
+  enforceDatasetAllowance('add'),
   addDatasetFiles
 );
 

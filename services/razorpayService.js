@@ -197,7 +197,7 @@ async function applyRazorpaySubscription(rzpSub) {
   const supabase = getSupabaseClient();
   const { data: current, error: readError } = await supabase
     .from('company_subscriptions')
-    .select('razorpay_subscription_id')
+    .select('razorpay_subscription_id, plan, status')
     .eq('company_id', notes.company_id)
     .maybeSingle();
   if (readError) throw readError;
@@ -205,6 +205,11 @@ async function applyRazorpaySubscription(rzpSub) {
   // Don't let a late event from an older, replaced subscription overwrite the current one
   if (current?.razorpay_subscription_id && current.razorpay_subscription_id !== rzpSub.id && status !== 'active') {
     return { applied: false, reason: 'event for a replaced subscription' };
+  }
+  // Nor let an old or abandoned subscription end a plan the superadmin gave for free
+  const freeGrant = current && !current.razorpay_subscription_id && current.status === 'active';
+  if (freeGrant && status !== 'active') {
+    return { applied: false, reason: 'company has free access from the superadmin' };
   }
 
   const update = {

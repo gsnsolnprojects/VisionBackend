@@ -5,6 +5,10 @@
  * reads these through GET /api/subscription, so change them here only.
  *
  * Limits: null = no limit.
+ *  - ownDatasets: datasets the company uploads itself (GSN sample links don't count)
+ *  - imagesPerDataset / maxImageSizeMB: per uploaded dataset and per image file
+ *  - trainingRunsPerMonth / predictionsPerMonth: reset each calendar month (India time),
+ *    failed or cancelled runs don't count; predictions count images, not batches
  */
 
 const PLANS = {
@@ -16,12 +20,17 @@ const PLANS = {
     priceMonthlyInr: 999,
     limits: {
       users: 1,
-      projects: 1,
+      projects: 2,
       liveCameraStreams: 0,
+      ownDatasets: 1,
+      imagesPerDataset: 500,
+      maxImageSizeMB: 5,
+      trainingRunsPerMonth: 5,
+      predictionsPerMonth: 1000,
     },
     features: {
-      // Training only on GSN-provided datasets with the provided base models
-      trainOnOwnDatasets: false,
+      // One uploaded dataset of its own, plus GSN sample datasets
+      trainOnOwnDatasets: true,
       uploadImagesForInference: true,
       inspectionDashboard: false,
       downloadableReports: false,
@@ -30,10 +39,10 @@ const PLANS = {
       configurableAlerts: false,
     },
     highlights: [
-      '1 user',
-      '1 sandbox project with GSN datasets and base models',
-      'Train your own model on the provided datasets',
-      'Upload sample images to run inference (no live camera)',
+      '1 user · 2 projects',
+      '1 dataset of your own (up to 500 images, 5 MB each) plus GSN sample datasets',
+      '5 training runs a month (nano and small models, latest 2 kept)',
+      '1,000 image predictions a month (no live camera)',
       'Defect previews and confidence scores',
       'Email support',
     ],
@@ -48,6 +57,11 @@ const PLANS = {
       users: 3,
       projects: 1,
       liveCameraStreams: 1,
+      ownDatasets: null,
+      imagesPerDataset: null,
+      maxImageSizeMB: null,
+      trainingRunsPerMonth: null,
+      predictionsPerMonth: null,
     },
     features: {
       trainOnOwnDatasets: true,
@@ -77,6 +91,11 @@ const PLANS = {
       users: 5,
       projects: 3,
       liveCameraStreams: 2,
+      ownDatasets: null,
+      imagesPerDataset: null,
+      maxImageSizeMB: null,
+      trainingRunsPerMonth: null,
+      predictionsPerMonth: null,
     },
     features: {
       trainOnOwnDatasets: true,
@@ -119,7 +138,7 @@ function getCompanyAccess(subscription, now = new Date()) {
       mode: 'full',
       reason: 'unlimited',
       plan: plan ? plan.id : null,
-      limits: { users: null, projects: null, liveCameraStreams: null },
+      limits: Object.fromEntries(Object.keys(PLANS.playground.limits).map((k) => [k, null])),
       features: Object.fromEntries(Object.keys(PLANS.production.features).map((f) => [f, true])),
     };
   }
@@ -135,7 +154,7 @@ function getCompanyAccess(subscription, now = new Date()) {
     mode: 'view_only',
     reason: !plan ? 'no_plan' : sub.status === 'active' ? 'expired' : sub.status || 'no_plan',
     plan: plan ? plan.id : null,
-    limits: plan ? plan.limits : { users: 0, projects: 0, liveCameraStreams: 0 },
+    limits: plan ? plan.limits : Object.fromEntries(Object.keys(PLANS.playground.limits).map((k) => [k, 0])),
     features: Object.fromEntries(Object.keys(PLANS.production.features).map((f) => [f, false])),
   };
 }
