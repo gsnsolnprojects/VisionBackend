@@ -232,7 +232,7 @@ const listUsers = async (req, res) => {
       return {
         id: p.id,
         name: p.name || null,
-        email: p.email || auth?.email || null,
+        email: auth?.email || p.email || null, // the address they sign in with
         phone: p.phone || null,
         role: p.role || null,
         companyId: p.company_id || null,
@@ -286,7 +286,7 @@ async function loadTargetUser(supabase, userId, req) {
   if (!profile && !authUser) return { status: 404, message: 'User not found' };
   if (userId === req.user.id) return { status: 400, message: 'You cannot do this to your own account' };
   if (profile?.role === 'platform_admin') return { status: 403, message: 'The superadmin account is protected' };
-  return { profile, authUser, email: profile?.email || authUser?.email || null };
+  return { profile, authUser, email: authUser?.email || profile?.email || null };
 }
 
 /**
