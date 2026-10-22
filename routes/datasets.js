@@ -18,6 +18,7 @@ const {
   getAnnotationSummary,
   getDatasetFolders,
   getDatasetFiles,
+  getFileLabels,
   addDatasetFiles,
   deleteDatasetFile,
   getFileThumbnail,
@@ -226,6 +227,9 @@ router.get('/:datasetId/folders', authenticateToken, requirePermission('viewData
  * Requires: viewRawDatasetImages permission (for Viewer role restriction)
  */
 router.get('/:datasetId/files', authenticateToken, requirePermission('viewRawDatasetImages'), getDatasetFiles);
+
+// GET /api/dataset/:datasetId/file-labels?ids=a,b - boxes for a page of images (Playground grid)
+router.get('/:datasetId/file-labels', authenticateToken, requirePermission('viewRawDatasetImages'), getFileLabels);
 
 /**
  * POST /api/dataset/:datasetId/files

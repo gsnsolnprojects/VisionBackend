@@ -3588,8 +3588,90 @@ const deleteDatasetFile = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/dataset/:datasetId/file-labels?ids=<fileId>,<fileId>,...
+ * The labelled boxes for a page of images (Playground's image grid draws them on the
+ * thumbnails). For each image: its YOLO label file if there is one, otherwise the boxes drawn
+ * in the app. Boxes are normalised 0-1 with a top-left corner: { c, x, y, w, h }.
+ * -> { classes: [{ index, name, color }], labels: { [fileId]: Box[] } }
+ */
+const getFileLabels = async (req, res) => {
+  try {
+    const dataset = await Dataset.findById(req.params.datasetId).lean();
+    if (!dataset) return res.status(404).json({ error: 'Dataset not found' });
+
+    const ids = String(req.query.ids || '').split(',').map((s) => s.trim()).filter(Boolean).slice(0, 200);
+    const baseOf = (name) => String(name || '').replace(/\.[^./]+$/, '');
+    const files = dataset.files || [];
+    const images = ids
+      .map((id) => files.find((f) => f.type === 'image' && (String(f._id) === id || f.storedName === id)))
+      .filter(Boolean);
+
+    let categories = await Category.getOrderedCategories(dataset._id);
+    if (!categories.length && dataset.linkedFrom) categories = await Category.getOrderedCategories(dataset.linkedFrom);
+
+    // Pair by stored name; some datasets store a label under its own unique name, so also pair
+    // by the uploaded file name within the same folder
+    const labelFiles = new Map();
+    for (const f of files) {
+      if (f.type !== 'label') continue;
+      labelFiles.set(baseOf(f.storedName), f);
+      labelFiles.set(`${f.folder}::${baseOf(f.originalName)}`, f);
+    }
+    const labels = {};
+    const needInApp = [];
+
+    for (const img of images) {
+      const labelFile =
+        labelFiles.get(baseOf(img.storedName)) || labelFiles.get(`${img.folder}::${baseOf(img.originalName)}`);
+      if (!labelFile) {
+        needInApp.push(img);
+        continue;
+      }
+      try {
+        const text = String(await storageAdapter.readFile(path.join(dataset.storagePath, labelFile.storedPath)));
+        labels[String(img._id)] = text
+          .split(/\r?\n/)
+          .map((line) => line.trim().split(/\s+/).map(Number))
+          .filter((n) => n.length >= 5 && n.every((v) => Number.isFinite(v)))
+          .map(([c, cx, cy, w, h]) => ({ c, x: cx - w / 2, y: cy - h / 2, w, h }));
+      } catch {
+        needInApp.push(img);
+      }
+    }
+
+    if (needInApp.length) {
+      const imageDocs = await Image.find({ datasetId: dataset._id, hasAnnotations: true })
+        .select('_id filename')
+        .lean();
+      const docByBase = new Map(imageDocs.map((d) => [baseOf(d.filename), d]));
+      const wanted = needInApp.map((img) => [img, docByBase.get(baseOf(img.storedName))]).filter(([, d]) => d);
+      if (wanted.length) {
+        const annotations = await Annotation.find({ imageId: { $in: wanted.map(([, d]) => d._id) } })
+          .select('imageId categoryId bbox')
+          .lean();
+        const indexOfCategory = new Map(categories.map((c, i) => [String(c._id), i]));
+        for (const [img, doc] of wanted) {
+          labels[String(img._id)] = annotations
+            .filter((a) => String(a.imageId) === String(doc._id) && Array.isArray(a.bbox))
+            .map((a) => ({ c: indexOfCategory.get(String(a.categoryId)) ?? 0, x: a.bbox[0], y: a.bbox[1], w: a.bbox[2], h: a.bbox[3] }));
+        }
+      }
+    }
+
+    res.json({
+      classes: categories.map((c, i) => ({ index: i, name: c.name, color: c.color || null })),
+      labels,
+    });
+  } catch (error) {
+    console.error('Get file labels error:', error);
+    res.status(500).json({ error: 'Could not load labels', message: error.message });
+  }
+};
+
 module.exports = {
   uploadDataset,
+  getFileLabels,
   listDatasets,
   getDataset,
   getDatasetStatus,
