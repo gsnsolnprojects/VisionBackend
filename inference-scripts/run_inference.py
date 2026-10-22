@@ -586,6 +586,9 @@ def run_inference(config):
                 'detections': file_detections,
                 'detectionCount': num_detections
             }
+            # Long names are shortened for the run; keep the name the photo had in its folder
+            if short_name_map.get(source_file_name):
+                file_info['originalName'] = short_name_map[source_file_name]
             if file_type == 'image':
                 coverage = compute_corrosion_coverage(result, file_detections)
                 if coverage:

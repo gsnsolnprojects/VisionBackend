@@ -1,4 +1,5 @@
-# Live API server on EC2: the API container plus Redis for the job queue.
+# Live API server on EC2: the API container, Redis for the job queue, and a CPU worker
+# that runs batch predictions (same image as the API; training still needs GPU workers).
 #
 #   API_IMAGE  the image to run (ECR URL:tag), set in /srv/vision/.env next to this file
 #   api.env    settings and secrets, written from AWS Parameter Store by load-secrets.sh
@@ -28,6 +29,33 @@ services:
       - "80:3000"
     depends_on:
       - redis
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  inference-worker:
+    image: ${API_IMAGE}
+    command: ["node", "/app/workers/inferenceWorker.js"]
+    env_file: /srv/vision/api.env
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      STORAGE_MODE: local
+      # 2 vCPUs on this server: keep PyTorch from oversubscribing them
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+    volumes:
+      - /srv/vision/data:/data
+    depends_on:
+      - redis
+    # The image's health check calls the API's /health, which this container doesn't serve
+    healthcheck:
+      disable: true
+    # Predictions never get to starve the API of memory
+    mem_limit: 3g
     restart: unless-stopped
     logging:
       driver: json-file

@@ -1205,6 +1205,8 @@ const getInferenceResults = async (req, res) => {
         corrosionPercentTotal: img.corrosionPercentTotal,
         byClass: stampClassIds(img.byClass || [], classNames),
         instanceCount: img.instanceCount ?? img.detectionCount,
+        // the photo's own name when the run used a shortened one (img_00000_ab12cd34.jpg)
+        originalName: img.originalName || undefined,
       };
       imageStatsByName[name] = stats;
       imageStatsByName[basename(name)] = stats;
