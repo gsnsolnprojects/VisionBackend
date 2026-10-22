@@ -21,8 +21,10 @@ const { getSupabaseClient } = require('./supabaseService');
 const RAZORPAY_API = 'https://api.razorpay.com/v1';
 const APP_TAG = 'visionm';
 
-// How many monthly charges a subscription is set up for (10 years)
-const SUBSCRIPTION_TOTAL_COUNT = 120;
+// How many monthly charges a subscription is set up for (1 year). UPI Autopay didn't show its
+// checkout QR for a 10-year (120) mandate; 12 matches the GSN app whose UPI Autopay works.
+// After the year the company picks the plan again from the Billing page.
+const SUBSCRIPTION_TOTAL_COUNT = 12;
 
 function getKeys() {
   const keyId = (process.env.RAZORPAY_KEY_ID || '').trim();
