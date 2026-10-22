@@ -185,6 +185,19 @@ const inferenceJobSchema = new mongoose.Schema({
     }
   },
 
+  // Playground tests close themselves this long after they start (set when a Playground
+  // workspace starts one); closing deletes the photos but keeps this record, so the month's
+  // prediction count stays right
+  autoCloseAt: {
+    type: Date,
+    default: null,
+    index: true,
+  },
+  closedAt: {
+    type: Date,
+    default: null,
+  },
+
   // Inference job status
   status: {
     type: String,

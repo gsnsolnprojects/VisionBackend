@@ -172,6 +172,10 @@ app.use('/api/admin', adminRoutes);
 // All routes in routes/samples.js will be prefixed with /api/samples
 app.use('/api/samples', sampleRoutes);
 
+// ✅ Register Playground test and report routes (close a test, PDF reports kept 24 hours)
+const playgroundRoutes = require('./routes/playground');
+app.use('/api/playground', playgroundRoutes);
+
 // ✅ Register temporary extinguisher OCR demo routes
 // All routes in routes/demoExtinguisherRoutes.js will be prefixed with /api/demo/extinguisher
 app.use('/api/demo/extinguisher', demoExtinguisherRoutes);
@@ -223,6 +227,13 @@ const startServer = async () => {
       console.error('❌ Failed to initialize queues:', error);
       process.exit(1);
     }
+
+    // Close Playground tests left open past their hour and delete expired reports
+    const { sweepPlayground } = require('./services/playgroundRunService');
+    const runSweep = () =>
+      sweepPlayground().catch((error) => console.error('[playground] cleanup failed:', error.message));
+    setTimeout(runSweep, 30 * 1000);
+    setInterval(runSweep, 5 * 60 * 1000);
 
     // ✅ Start Express server
     app.listen(PORT, () => {

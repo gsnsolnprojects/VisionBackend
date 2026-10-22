@@ -16,6 +16,7 @@ const { buildWorkspaceFilter, validateWorkspaceAccess, canAccessAllWorkspaces } 
 const { resolveInferenceImagePath } = require('../utils/resolveInferenceImagePath');
 const { normalizeAssessment } = require('../utils/assessment');
 const { countPredictionsThisMonth } = require('../utils/usage');
+const { isPlaygroundCustomer, PLAYGROUND_TEST_LIFETIME_MS } = require('../services/playgroundRunService');
 const fs = require('fs');
 const fsPromises = require('fs').promises;
 const path = require('path');
@@ -311,6 +312,8 @@ const startBatchInference = async (req, res) => {
       sourceType: sourceType,
       status: 'queued',
       createdBy: req.user ? req.user.id : null, // Store user ID for ownership verification
+      // Playground tests close themselves after an hour (photos deleted, record kept)
+      autoCloseAt: isPlaygroundCustomer(req.user) ? new Date(Date.now() + PLAYGROUND_TEST_LIFETIME_MS) : null,
       regionName: regionName || null,
       progress: {
         totalImages: totalImages,
@@ -984,6 +987,8 @@ const getInferenceStatus = async (req, res) => {
       startedAt: inferenceJob.startedAt,
       completedAt: inferenceJob.completedAt,
       cancelledAt: inferenceJob.cancelledAt,
+      autoCloseAt: inferenceJob.autoCloseAt || null,
+      closedAt: inferenceJob.closedAt || null,
       error: inferenceJob.error
     };
 
