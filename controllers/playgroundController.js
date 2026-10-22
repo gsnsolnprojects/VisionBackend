@@ -82,9 +82,9 @@ const createReport = async (req, res) => {
 
     auditService.logAction({
       action: 'create',
-      resourceType: 'report',
-      resourceId: String(report._id),
-      details: { company: job.company, project: job.project, inferenceId: job.inferenceId, photos: written.photos },
+      resourceType: 'inference',
+      resourceId: job.inferenceId,
+      details: { company: job.company, project: job.project, change: 'playground report created', reportId: String(report._id), photos: written.photos },
       req,
     });
 
