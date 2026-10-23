@@ -6,6 +6,8 @@ const {
   createReport,
   listReports,
   downloadReport,
+  downloadCsv,
+  reportPreview,
   deleteReport,
 } = require('../controllers/playgroundController');
 
@@ -16,6 +18,8 @@ router.post('/runs/:inferenceId/close', authenticateToken, requirePermission('ru
 router.post('/runs/:inferenceId/report', authenticateToken, requirePermission('runInference'), createReport);
 router.get('/reports', authenticateToken, requirePermission('viewInferenceResults'), listReports);
 router.get('/reports/:id/download', authenticateToken, requirePermission('viewInferenceResults'), downloadReport);
+router.get('/reports/:id/csv', authenticateToken, requirePermission('viewInferenceResults'), downloadCsv);
+router.get('/reports/:id/preview', authenticateToken, requirePermission('viewInferenceResults'), reportPreview);
 router.delete('/reports/:id', authenticateToken, requirePermission('runInference'), deleteReport);
 
 module.exports = router;

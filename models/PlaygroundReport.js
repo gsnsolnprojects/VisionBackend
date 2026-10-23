@@ -16,6 +16,10 @@ const playgroundReportSchema = new mongoose.Schema(
     inferenceId: { type: String, required: true },
     photos: { type: Number, default: 0 },
     filePath: { type: String, required: true },
+    /** The same results as a spreadsheet (reports made before CSVs existed have none) */
+    csvPath: { type: String, default: null },
+    /** Small picture of the first photo, for the reports list */
+    previewPath: { type: String, default: null },
     sizeBytes: { type: Number, default: 0 },
     createdBy: { type: String, default: null },
     expiresAt: { type: Date, required: true, index: true },

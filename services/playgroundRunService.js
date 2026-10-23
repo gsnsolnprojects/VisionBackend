@@ -61,10 +61,15 @@ async function readResultPhotos(job) {
     for (const file of (await fsPromises.readdir(dir)).sort()) {
       if (!/\.(jpe?g|png)$/i.test(file) || photos.some((p) => p.file === file)) continue;
       const meta = byName.get(file) || {};
-      const found = (meta.byClass || [])
+      const classes = (meta.byClass || [])
         .filter((c) => (c.count ?? 1) > 0)
-        .map((c) => `${String(c.class || c.className || '').replace(/_/g, ' ')}${c.count > 1 ? ` ×${c.count}` : ''}`);
-      photos.push({ file, path: path.join(dir, file), originalName: meta.originalName || file, found });
+        .map((c) => ({
+          name: String(c.class || c.className || '').replace(/_/g, ' '),
+          count: c.count ?? 1,
+          confidence: typeof c.avgConfidence === 'number' ? c.avgConfidence : null,
+        }));
+      const found = classes.map((c) => `${c.name}${c.count > 1 ? ` ×${c.count}` : ''}`);
+      photos.push({ file, path: path.join(dir, file), originalName: meta.originalName || file, found, classes });
     }
   }
   return photos;
@@ -75,7 +80,7 @@ async function readResultPhotos(job) {
  * @param {object} job InferenceJob (lean or document)
  * @param {{ title: string, industry?: string|null, modelName?: string|null, labelled?: Record<string, string[]> }} info
  *   labelled: what the dataset labels say for held-out photos, by original file name
- * @returns {Promise<{ filePath: string, sizeBytes: number, photos: number }>}
+ * @returns {Promise<{ filePath: string, csvPath: string, previewPath: string|null, sizeBytes: number, photos: number }>}
  */
 async function writeReport(job, info) {
   const photos = (await readResultPhotos(job)).slice(0, MAX_REPORT_PHOTOS);
@@ -164,7 +169,53 @@ async function writeReport(job, info) {
     out.on('error', reject);
   });
   const { size } = await fsPromises.stat(filePath);
-  return { filePath, sizeBytes: size, photos: photos.length };
+  const csvPath = await writeReportCsv(info, photos, path.join(dir, `${job.inferenceId}.csv`));
+  const previewPath = await writePreview(photos[0], path.join(dir, `${job.inferenceId}.jpg`));
+  return { filePath, csvPath, previewPath, sizeBytes: size, photos: photos.length };
+}
+
+const csvCell = (v) => {
+  const text = v === null || v === undefined ? '' : String(v);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+};
+
+/** One row per photo: what the model found, with counts and confidence, next to the dataset labels */
+async function writeReportCsv(info, photos, csvPath) {
+  const rows = [['Photo', 'Model found', 'Total finds', 'Confidence', 'Labelled in the dataset']];
+  for (const p of photos) {
+    const labelled = info.labelled?.[p.originalName] || info.labelled?.[p.file];
+    rows.push([
+      p.originalName,
+      p.found.length ? p.found.join('; ') : 'nothing',
+      p.classes.reduce((sum, c) => sum + c.count, 0),
+      p.classes
+        .filter((c) => c.confidence !== null)
+        .map((c) => `${c.name} ${Math.round(c.confidence * 100)}%`)
+        .join('; '),
+      labelled ? (labelled.length ? labelled.map((l) => l.replace(/_/g, ' ')).join('; ') : 'nothing') : '',
+    ]);
+  }
+  // BOM so Excel opens the file as UTF-8
+  await fsPromises.writeFile(csvPath, '\uFEFF' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n'), 'utf8');
+  return csvPath;
+}
+
+/** A small picture of the first result photo, for the reports list */
+async function writePreview(photo, previewPath) {
+  if (!photo) return null;
+  try {
+    await sharp(photo.path).resize({ width: 480, height: 320, fit: 'cover' }).jpeg({ quality: 70 }).toFile(previewPath);
+    return previewPath;
+  } catch {
+    return null;
+  }
+}
+
+/** Delete a report's files (PDF, CSV, preview) */
+async function removeReportFiles(report) {
+  for (const file of [report.filePath, report.csvPath, report.previewPath].filter(Boolean)) {
+    await fsPromises.rm(file, { force: true }).catch(() => undefined);
+  }
 }
 
 /** Close tests left open past their time and delete expired reports */
@@ -183,9 +234,9 @@ async function sweepPlayground() {
     .lean();
   for (const job of due) await closeRun(job);
 
-  const expired = await PlaygroundReport.find({ expiresAt: { $lte: now } }).select('_id filePath').lean();
+  const expired = await PlaygroundReport.find({ expiresAt: { $lte: now } }).select('_id filePath csvPath previewPath').lean();
   for (const report of expired) {
-    await fsPromises.rm(report.filePath, { force: true }).catch(() => undefined);
+    await removeReportFiles(report);
     await PlaygroundReport.deleteOne({ _id: report._id });
   }
   if (due.length || expired.length) {
@@ -199,5 +250,6 @@ module.exports = {
   isPlaygroundCustomer,
   closeRun,
   writeReport,
+  removeReportFiles,
   sweepPlayground,
 };

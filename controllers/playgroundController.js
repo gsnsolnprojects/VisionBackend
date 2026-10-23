@@ -1,20 +1,21 @@
 const fs = require('fs');
-const fsPromises = require('fs').promises;
 const mongoose = require('mongoose');
 const InferenceJob = require('../models/InferenceJob');
 const Model = require('../models/Model');
 const PlaygroundReport = require('../models/PlaygroundReport');
 const auditService = require('../services/auditService');
 const { canAccessAllWorkspaces } = require('../utils/workspaceScoping');
-const { closeRun, writeReport, PLAYGROUND_REPORT_LIFETIME_MS } = require('../services/playgroundRunService');
+const { closeRun, writeReport, removeReportFiles, PLAYGROUND_REPORT_LIFETIME_MS } = require('../services/playgroundRunService');
 
 /**
  * Playground tests and reports (see services/playgroundRunService.js)
  *
  * POST   /api/playground/runs/:inferenceId/close   delete the test's photos
  * POST   /api/playground/runs/:inferenceId/report  write a PDF report, then close the test
- * GET    /api/playground/reports?projectId=        reports still available for a project
+ * GET    /api/playground/reports?projectId=        reports still available (all projects, or one)
  * GET    /api/playground/reports/:id/download      the PDF
+ * GET    /api/playground/reports/:id/csv           the results as a spreadsheet
+ * GET    /api/playground/reports/:id/preview       small picture of the first photo
  * DELETE /api/playground/reports/:id               delete a report early
  */
 
@@ -74,6 +75,8 @@ const createReport = async (req, res) => {
       inferenceId: job.inferenceId,
       photos: written.photos,
       filePath: written.filePath,
+      csvPath: written.csvPath,
+      previewPath: written.previewPath,
       sizeBytes: written.sizeBytes,
       createdBy: req.user?.id || null,
       expiresAt: new Date(Date.now() + PLAYGROUND_REPORT_LIFETIME_MS),
@@ -98,12 +101,16 @@ const createReport = async (req, res) => {
 const toJson = (r) => ({
   id: String(r._id),
   title: r.title,
+  project: r.project,
+  projectId: r.projectId,
   industry: r.industry,
   modelName: r.modelName,
   photos: r.photos,
   sizeBytes: r.sizeBytes,
   createdAt: r.createdAt,
   expiresAt: r.expiresAt,
+  hasCsv: Boolean(r.csvPath),
+  hasPreview: Boolean(r.previewPath),
 });
 
 const listReports = async (req, res) => {
@@ -130,12 +137,14 @@ async function loadReport(req, res) {
   return report;
 }
 
+const reportFileName = (report, ext) => `${report.title.replace(/[^\w\- ]+/g, '').trim() || 'report'} - test report.${ext}`;
+
 const downloadReport = async (req, res) => {
   try {
     const report = await loadReport(req, res);
     if (!report) return;
     if (!fs.existsSync(report.filePath)) return res.status(404).json({ error: 'Report file missing' });
-    const name = `${report.title.replace(/[^\w\- ]+/g, '').trim() || 'report'} - test report.pdf`;
+    const name = reportFileName(report, 'pdf');
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
     fs.createReadStream(report.filePath).pipe(res);
@@ -144,11 +153,39 @@ const downloadReport = async (req, res) => {
   }
 };
 
+const downloadCsv = async (req, res) => {
+  try {
+    const report = await loadReport(req, res);
+    if (!report) return;
+    if (!report.csvPath || !fs.existsSync(report.csvPath)) {
+      return res.status(404).json({ error: 'No spreadsheet', message: 'This report has no spreadsheet. Reports made from now on include one.' });
+    }
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${reportFileName(report, 'csv')}"`);
+    fs.createReadStream(report.csvPath).pipe(res);
+  } catch (error) {
+    res.status(500).json({ error: 'Could not download the spreadsheet', message: error.message });
+  }
+};
+
+const reportPreview = async (req, res) => {
+  try {
+    const report = await loadReport(req, res);
+    if (!report) return;
+    if (!report.previewPath || !fs.existsSync(report.previewPath)) return res.status(404).json({ error: 'No preview' });
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    fs.createReadStream(report.previewPath).pipe(res);
+  } catch (error) {
+    res.status(500).json({ error: 'Could not load the preview', message: error.message });
+  }
+};
+
 const deleteReport = async (req, res) => {
   try {
     const report = await loadReport(req, res);
     if (!report) return;
-    await fsPromises.rm(report.filePath, { force: true });
+    await removeReportFiles(report);
     await PlaygroundReport.deleteOne({ _id: report._id });
     res.json({ success: true });
   } catch (error) {
@@ -156,4 +193,4 @@ const deleteReport = async (req, res) => {
   }
 };
 
-module.exports = { closeTest, createReport, listReports, downloadReport, deleteReport };
+module.exports = { closeTest, createReport, listReports, downloadReport, downloadCsv, reportPreview, deleteReport };
