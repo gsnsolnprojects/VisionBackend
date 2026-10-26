@@ -16,6 +16,7 @@ const InferenceJob = require('../models/InferenceJob');
 const Model = require('../models/Model');
 const Dataset = require('../models/Dataset');
 const storageAdapter = require('../services/storageAdapter');
+const { getClassNamesForTrainedModel } = require('../services/yoloClassNamesService');
 
 /**
  * Inference Worker - Background Job Processor
@@ -363,12 +364,18 @@ const processInferenceJob = async (job) => {
       // Do not spawn a second Python process to extract class names here.
       // run_inference.py already reads model.names after YOLO() loads — this
       // extra spawn was loading the .pt file twice (often 15–60s wasted).
+      // The training dataset's class names, for models whose checkpoint only has placeholders
+      // (class_0, class_1, ...); run_inference.py uses them only in that case. Read from files,
+      // not the checkpoint, so nothing extra is loaded.
+      const classNames = await getClassNamesForTrainedModel(model.toObject(), { skipCheckpoint: true }).catch(() => []);
+
       const config = {
         model: checkpointPath,
         source: sourceFolderPath,
         output: resultsPath,
         conf: confidenceThreshold,
-        modelType: model.modelType
+        modelType: model.modelType,
+        classNames
       };
 
       const configPath = path.join(resultsPath, 'inference-config.json');

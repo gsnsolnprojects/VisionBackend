@@ -16,6 +16,7 @@ import os
 import sys
 import shutil
 import hashlib
+import re
 from pathlib import Path
 
 try:
@@ -324,6 +325,19 @@ def convert_avi_to_mp4(source_path, mp4_path):
         return False
 
 
+def apply_dataset_class_names(model, class_names):
+    """Models trained before their dataset had class names carry placeholders (class_0,
+    class_1, ...). Use the training dataset's names instead, in the same order (sent by the
+    worker as classNames). Models with real names are left alone."""
+    names = getattr(model, "names", None) or {}
+    if not class_names or len(class_names) != len(names):
+        return
+    if not all(re.fullmatch(r"class_\d+", str(n)) for n in names.values()):
+        return
+    model.model.names = {i: str(n) for i, n in enumerate(class_names)}
+    print(f"Class names from the training dataset: {list(model.model.names.values())}")
+
+
 def run_inference(config):
     """Run YOLO inference with given configuration."""
     try:
@@ -376,6 +390,7 @@ def run_inference(config):
 
         # ✅ Load YOLO model
         model = YOLO(model_path)
+        apply_dataset_class_names(model, config.get('classNames'))
 
         print(f"✅ Model loaded successfully")
         print(f"Running inference on: {source}")
