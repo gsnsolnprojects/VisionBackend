@@ -15,7 +15,7 @@ const auditService = require('../services/auditService');
 const { buildWorkspaceFilter, validateWorkspaceAccess, canAccessAllWorkspaces } = require('../utils/workspaceScoping');
 const { resolveInferenceImagePath } = require('../utils/resolveInferenceImagePath');
 const { normalizeAssessment } = require('../utils/assessment');
-const { countPredictionsThisMonth } = require('../utils/usage');
+const { countPredictionsThisMonth, keepDeletedUsage } = require('../utils/usage');
 const { isPlaygroundCustomer, PLAYGROUND_TEST_LIFETIME_MS } = require('../services/playgroundRunService');
 const fs = require('fs');
 const fsPromises = require('fs').promises;
@@ -1720,7 +1720,8 @@ const deleteInference = async (req, res) => {
       }
     }
 
-    // ✅ Delete MongoDB document
+    // ✅ Delete MongoDB document (its predictions still count towards this month's allowance)
+    await keepDeletedUsage({ inferenceJobs: [inferenceJob] });
     await InferenceJob.deleteOne({ inferenceId });
 
     return res.status(200).json({
