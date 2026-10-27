@@ -8,6 +8,7 @@ const trainingRoutes = require('./routes/training');
 const modelRoutes = require('./routes/models');
 const inferenceRoutes = require('./routes/inference');
 const mobileInspectRoutes = require('./routes/mobileInspect');
+const stationRoutes = require('./routes/station');
 const aiRoutes = require('./routes/ai');
 const dashboardRoutes = require('./routes/dashboard');
 const analyticsRoutes = require('./routes/analytics');
@@ -134,6 +135,9 @@ app.use('/api/models', modelRoutes);
 // All routes in routes/inference.js will be prefixed with /api/inference
 app.use('/api/inference', inferenceRoutes);
 app.use('/api/mobile-inspect', mobileInspectRoutes);
+
+// ✅ Vision-M Station (Windows desktop app): run summaries + defect snapshot uploads
+app.use('/api/station', stationRoutes);
 
 // ✅ Register AI routes
 // All routes in routes/ai.js will be prefixed with /api/ai
