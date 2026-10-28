@@ -21,6 +21,7 @@ const PlaygroundReport = require('../models/PlaygroundReport');
 const PLAYGROUND_TEST_LIFETIME_MS = 60 * 60 * 1000; // 1 hour
 const PLAYGROUND_REPORT_LIFETIME_MS = 24 * 60 * 60 * 1000; // 24 hours
 const REPORTS_DIR = path.join(process.cwd(), 'reports', 'playground');
+const GSN_LOGO = path.join(__dirname, '..', 'assets', 'gsn-logo.png');
 const MAX_REPORT_PHOTOS = 120;
 
 const isPlaygroundCustomer = (user) =>
@@ -93,15 +94,23 @@ async function writeReport(job, info) {
   doc.pipe(out);
 
   const W = doc.page.width - 80;
-  const ink = '#171f1b';
-  const muted = '#5b6359';
-  const accent = '#6b8a1f';
+  // GSN brand colours, taken from the logo
+  const brand = '#5432e9';
+  const ink = '#160952';
+  const muted = '#5f5a7a';
+  const accent = brand;
+  const photoBg = '#efecfd';
 
   // Cover block
-  doc.rect(40, 40, W, 92).fill(ink);
-  doc.fillColor('#e9ff65').font('Helvetica-Bold').fontSize(9).text('VISION-M PLAYGROUND · TEST REPORT', 56, 56, { characterSpacing: 1.2 });
-  doc.fillColor('#f5f5ee').fontSize(22).text(info.title, 56, 74, { width: W - 32 });
-  if (info.industry) doc.fillColor('#bec9b0').font('Helvetica').fontSize(10).text(info.industry, 56, 106);
+  doc.rect(40, 40, W, 92).fill(brand);
+  doc.fillColor('#d9d1ff').font('Helvetica-Bold').fontSize(9).text('VISION-M PLAYGROUND · TEST REPORT', 56, 56, { characterSpacing: 1.2 });
+  doc.fillColor('#ffffff').fontSize(22).text(info.title, 56, 74, { width: W - 140 });
+  if (info.industry) doc.fillColor('#e4ddff').font('Helvetica').fontSize(10).text(info.industry, 56, 106);
+  // GSN logo on a white badge so its purple swirl stands apart from the purple block
+  if (fs.existsSync(GSN_LOGO)) {
+    doc.roundedRect(40 + W - 112, 58, 96, 56, 6).fill('#ffffff');
+    doc.image(GSN_LOGO, 40 + W - 104, 64, { fit: [80, 44], align: 'center', valign: 'center' });
+  }
   doc.y = 150;
 
   const totals = new Map();
@@ -146,10 +155,10 @@ async function writeReport(job, info) {
     const x = 40 + col * (colW + 16);
     try {
       const jpeg = await sharp(p.path).resize({ width: 640, height: 430, fit: 'inside' }).jpeg({ quality: 72 }).toBuffer();
-      doc.rect(x, rowTop, colW, imgH).fill('#171f1b');
+      doc.rect(x, rowTop, colW, imgH).fill(photoBg);
       doc.image(jpeg, x, rowTop, { fit: [colW, imgH], align: 'center', valign: 'center' });
     } catch {
-      doc.rect(x, rowTop, colW, imgH).fill('#e5e7e0');
+      doc.rect(x, rowTop, colW, imgH).fill('#e2ddfb');
     }
     doc.font('Helvetica').fontSize(8).fillColor(muted).text(p.originalName, x, rowTop + imgH + 5, { width: colW, height: 10, ellipsis: true });
     doc.fillColor(ink).font('Helvetica-Bold').fontSize(8.5).text('Model found: ', x, rowTop + imgH + 18, { continued: true, width: colW });
