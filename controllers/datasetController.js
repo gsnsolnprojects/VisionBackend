@@ -11,6 +11,7 @@ const storageAdapter = require('../services/storageAdapter');
 // getLabelSource: labelSource for frontend badges (Unlabeled, Pre-Labelled, Manually Labelled)
 const { copyDataset, getLabelSource } = require('../services/datasetCopyService');
 const { removeLibraryEntriesForDatasets } = require('../services/sampleLibraryService');
+const { isPlaygroundCustomer, isPlaygroundHiddenClass } = require('../services/playgroundRunService');
 const { preprocessingQueue, augmentationQueue } = require('../queue');
 const { generateDataYaml, getLabelFilePath } = require('../utils/yoloConverter');
 const auditService = require('../services/auditService');
@@ -3594,6 +3595,8 @@ const deleteDatasetFile = async (req, res) => {
  * The labelled boxes for a page of images (Playground's image grid draws them on the
  * thumbnails). For each image: its YOLO label file if there is one, otherwise the boxes drawn
  * in the app. Boxes are normalised 0-1 with a top-left corner: { c, x, y, w, h }.
+ * Playground customers don't get the hidden labels (e.g. "product"): neither the class nor its
+ * boxes; the other classes keep their index.
  * -> { classes: [{ index, name, color }], labels: { [fileId]: Box[] } }
  */
 const getFileLabels = async (req, res) => {
@@ -3660,10 +3663,15 @@ const getFileLabels = async (req, res) => {
       }
     }
 
-    res.json({
-      classes: categories.map((c, i) => ({ index: i, name: c.name, color: c.color || null })),
-      labels,
-    });
+    let classes = categories.map((c, i) => ({ index: i, name: c.name, color: c.color || null }));
+    if (isPlaygroundCustomer(req.user)) {
+      const hidden = new Set(classes.filter((c) => isPlaygroundHiddenClass(c.name)).map((c) => c.index));
+      if (hidden.size) {
+        classes = classes.filter((c) => !hidden.has(c.index));
+        for (const id of Object.keys(labels)) labels[id] = labels[id].filter((b) => !hidden.has(b.c));
+      }
+    }
+    res.json({ classes, labels });
   } catch (error) {
     console.error('Get file labels error:', error);
     res.status(500).json({ error: 'Could not load labels', message: error.message });

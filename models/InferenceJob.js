@@ -160,6 +160,14 @@ const inferenceJobSchema = new mongoose.Schema({
     index: true
   },
 
+  // 'practice': a Playground "Learn to label" auto-label run on GSN sample photos. It doesn't
+  // use up the monthly prediction allowance or count as one of the student's predictions.
+  purpose: {
+    type: String,
+    enum: ['practice', null],
+    default: null
+  },
+
   // Reference to dataset (only for test_folder sourceType)
   datasetId: {
     type: mongoose.Schema.Types.ObjectId,

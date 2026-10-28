@@ -16,7 +16,7 @@ const { buildWorkspaceFilter, validateWorkspaceAccess, canAccessAllWorkspaces } 
 const { resolveInferenceImagePath } = require('../utils/resolveInferenceImagePath');
 const { normalizeAssessment } = require('../utils/assessment');
 const { countPredictionsThisMonth, keepDeletedUsage } = require('../utils/usage');
-const { isPlaygroundCustomer, PLAYGROUND_TEST_LIFETIME_MS } = require('../services/playgroundRunService');
+const { isPlaygroundCustomer, PLAYGROUND_TEST_LIFETIME_MS, PLAYGROUND_HIDDEN_CLASSES } = require('../services/playgroundRunService');
 const fs = require('fs');
 const fsPromises = require('fs').promises;
 const path = require('path');
@@ -340,7 +340,9 @@ const startBatchInference = async (req, res) => {
       company: model.company,
       project: model.project,
       sourceType: sourceType,
-      confidenceThreshold: conf
+      confidenceThreshold: conf,
+      // Playground customers never see these labels (e.g. "product"): the model skips them
+      hiddenClasses: isPlaygroundCustomer(req.user) ? PLAYGROUND_HIDDEN_CLASSES : []
     };
 
     // ✅ Add source-specific fields to job data

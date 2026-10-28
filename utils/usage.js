@@ -47,7 +47,7 @@ async function countTrainingRunsThisMonth(company) {
 async function countPredictionsThisMonth(company) {
   const [[row], kept] = await Promise.all([
     InferenceJob.aggregate([
-      { $match: { company, createdAt: { $gte: startOfMonthIST() }, status: NOT_WASTED } },
+      { $match: { company, createdAt: { $gte: startOfMonthIST() }, status: NOT_WASTED, purpose: { $ne: 'practice' } } },
       { $group: { _id: null, images: { $sum: { $ifNull: ['$progress.totalImages', 0] } } } },
     ]),
     carriedOver(company),

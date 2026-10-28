@@ -325,6 +325,24 @@ def convert_avi_to_mp4(source_path, mp4_path):
         return False
 
 
+def class_key(name):
+    return re.sub(r"[\s_-]+", " ", str(name or "").strip().lower())
+
+
+def kept_class_ids(model, hidden_classes):
+    """Class ids to predict when some labels are hidden (sent by the worker as hiddenClasses,
+    e.g. "product" in the Playground), or None to keep every class."""
+    names = getattr(model, "names", None) or {}
+    hidden = {class_key(n) for n in (hidden_classes or [])}
+    if not hidden or not names:
+        return None
+    keep = [i for i, n in names.items() if class_key(n) not in hidden]
+    if len(keep) == len(names) or not keep:
+        return None
+    print(f"Skipping hidden classes: {sorted(n for n in names.values() if class_key(n) in hidden)}")
+    return keep
+
+
 def apply_dataset_class_names(model, class_names):
     """Models trained before their dataset had class names carry placeholders (class_0,
     class_1, ...). Use the training dataset's names instead, in the same order (sent by the
@@ -428,6 +446,9 @@ def run_inference(config):
             exist_ok=True,
             verbose=False,
         )
+        keep_ids = kept_class_ids(model, config.get('hiddenClasses'))
+        if keep_ids is not None:
+            predict_kwargs['classes'] = keep_ids
         box_kwargs = {'boxes': False} if is_segmentation else {}
         try:
             results = model.predict(**predict_kwargs, **box_kwargs)

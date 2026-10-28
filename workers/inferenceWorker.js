@@ -375,7 +375,9 @@ const processInferenceJob = async (job) => {
         output: resultsPath,
         conf: confidenceThreshold,
         modelType: model.modelType,
-        classNames
+        classNames,
+        // Labels the model should skip (Playground hides e.g. "product")
+        hiddenClasses: Array.isArray(job.data.hiddenClasses) ? job.data.hiddenClasses : []
       };
 
       const configPath = path.join(resultsPath, 'inference-config.json');

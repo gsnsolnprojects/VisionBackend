@@ -9,6 +9,8 @@ const {
   downloadCsv,
   reportPreview,
   deleteReport,
+  startPracticeAutoLabel,
+  getPracticeAutoLabel,
 } = require('../controllers/playgroundController');
 
 /** Playground tests and reports (controllers/playgroundController.js) */
@@ -21,5 +23,7 @@ router.get('/reports/:id/download', authenticateToken, requirePermission('viewIn
 router.get('/reports/:id/csv', authenticateToken, requirePermission('viewInferenceResults'), downloadCsv);
 router.get('/reports/:id/preview', authenticateToken, requirePermission('viewInferenceResults'), reportPreview);
 router.delete('/reports/:id', authenticateToken, requirePermission('runInference'), deleteReport);
+router.post('/practice/auto-label', authenticateToken, requirePermission('runInference'), startPracticeAutoLabel);
+router.get('/practice/auto-label/:inferenceId', authenticateToken, requirePermission('viewInferenceResults'), getPracticeAutoLabel);
 
 module.exports = router;

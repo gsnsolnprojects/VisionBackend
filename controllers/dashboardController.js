@@ -602,7 +602,7 @@ const getLearningProgress = async (req, res) => {
         Dataset.countDocuments({ company, deletedAt: null }),
         Dataset.countDocuments({ company, deletedAt: null, linkedFrom: { $ne: null } }),
         Model.countDocuments({ company, linkedFrom: null }),
-        InferenceJob.countDocuments({ company, status: 'completed' }),
+        InferenceJob.countDocuments({ company, status: 'completed', purpose: { $ne: 'practice' } }),
         countStoredImages(company),
         countTrainingRunsThisMonth(company),
         countPredictionsThisMonth(company),

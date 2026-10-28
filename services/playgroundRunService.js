@@ -19,6 +19,16 @@ const PlaygroundReport = require('../models/PlaygroundReport');
  */
 
 const PLAYGROUND_TEST_LIFETIME_MS = 60 * 60 * 1000; // 1 hour
+/**
+ * Labels Playground customers never see: some GSN samples mark the whole part ("product") so the
+ * model finds it in the frame, but it isn't a defect and confuses students. Predictions skip
+ * them and sample label views leave them out; GSN's own workspace still sees them.
+ */
+const PLAYGROUND_HIDDEN_CLASSES = ['product'];
+const classKey = (name) => String(name || '').trim().toLowerCase().replace(/[\s_-]+/g, ' ');
+const HIDDEN_KEYS = new Set(PLAYGROUND_HIDDEN_CLASSES.map(classKey));
+/** Whether a label name is hidden in the Playground */
+const isPlaygroundHiddenClass = (name) => HIDDEN_KEYS.has(classKey(name));
 const PLAYGROUND_REPORT_LIFETIME_MS = 24 * 60 * 60 * 1000; // 24 hours
 const REPORTS_DIR = path.join(process.cwd(), 'reports', 'playground');
 const GSN_LOGO = path.join(__dirname, '..', 'assets', 'gsn-logo.png');
@@ -255,6 +265,8 @@ async function sweepPlayground() {
 
 module.exports = {
   PLAYGROUND_TEST_LIFETIME_MS,
+  PLAYGROUND_HIDDEN_CLASSES,
+  isPlaygroundHiddenClass,
   PLAYGROUND_REPORT_LIFETIME_MS,
   isPlaygroundCustomer,
   closeRun,
