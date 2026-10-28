@@ -25,6 +25,9 @@ const projectNameMatcher = (project) => new RegExp(`^\\s*${escapeRegex(String(pr
 /** Windows drops trailing spaces in paths ("webcam \\v2") unless the \\\\?\\ form is used */
 const fsPath = (p) => path.toNamespacedPath(p);
 
+/** A dataset queued or processing with no change for this long is stuck, so it doesn't block deleting its project */
+const STUCK_DATASET_MS = 60 * 60 * 1000;
+
 /**
  * Dashboard Controller
  *
@@ -402,11 +405,13 @@ const deleteProject = async (req, res) => {
       return res.status(409).json({ error: message, message });
     }
 
-    // Pre-check: no active datasets (processing/queued)
+    // Pre-check: no active datasets (processing/queued). One untouched for an hour is stuck (e.g. no
+    // preprocessing worker picked it up) and would otherwise make the project impossible to delete.
     const activeDatasets = await Dataset.countDocuments({
       ...filter,
       deletedAt: null,
-      status: { $in: ['processing', 'queued'] }
+      status: { $in: ['processing', 'queued'] },
+      updatedAt: { $gte: new Date(Date.now() - STUCK_DATASET_MS) }
     });
     if (activeDatasets > 0) {
       return res.status(400).json({
@@ -511,8 +516,9 @@ const deleteProject = async (req, res) => {
     // 5. Datasets: delete files and soft-delete documents
     const datasets = await Dataset.find({ ...filter, deletedAt: null });
     for (const dataset of datasets) {
-      if (dataset.status === 'processing' || dataset.status === 'queued') {
-        continue; // Should not happen due to pre-check
+      const active = dataset.status === 'processing' || dataset.status === 'queued';
+      if (active && Date.now() - new Date(dataset.updatedAt).getTime() < STUCK_DATASET_MS) {
+        continue; // Should not happen due to pre-check; stuck ones are deleted like the rest
       }
       // Linked sample datasets point at GSN's shared folder: only the record goes
       if (!dataset.linkedFrom && dataset.storagePath && fs.existsSync(fsPath(dataset.storagePath))) {
