@@ -12,6 +12,7 @@ const path = require('path');
 const { deleteProjectRow } = require('../services/supabaseService');
 const { removeLibraryEntriesForDatasets } = require('../services/sampleLibraryService');
 const { countStoredImages, countTrainingRunsThisMonth, countPredictionsThisMonth, keepDeletedUsage } = require('../utils/usage');
+const { getPathProgress } = require('../services/playgroundProgressService');
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -584,8 +585,8 @@ const deleteProject = async (req, res) => {
  * GET /api/dashboard/learning-progress
  * Counts behind the Playground learning path and allowance meters, for the caller's own
  * company: datasets (and how many are GSN sample links), own trained models, finished
- * predictions, images stored in its own datasets, and this month's training runs and
- * predicted images (see utils/usage.js).
+ * predictions, images stored in its own datasets, this month's training runs and predicted
+ * images (see utils/usage.js), and the challenge-path steps it finished (`path`).
  */
 const getLearningProgress = async (req, res) => {
   try {
@@ -594,10 +595,11 @@ const getLearningProgress = async (req, res) => {
       return res.json({
         datasets: 0, sampleDatasets: 0, models: 0, predictions: 0,
         storedImages: 0, trainingRunsThisMonth: 0, predictionsThisMonth: 0,
+        path: { guidedDone: false, practiceDone: false },
       });
     }
 
-    const [datasets, sampleDatasets, models, predictions, storedImages, trainingRunsThisMonth, predictionsThisMonth] =
+    const [datasets, sampleDatasets, models, predictions, storedImages, trainingRunsThisMonth, predictionsThisMonth, path] =
       await Promise.all([
         Dataset.countDocuments({ company, deletedAt: null }),
         Dataset.countDocuments({ company, deletedAt: null, linkedFrom: { $ne: null } }),
@@ -606,8 +608,9 @@ const getLearningProgress = async (req, res) => {
         countStoredImages(company),
         countTrainingRunsThisMonth(company),
         countPredictionsThisMonth(company),
+        getPathProgress(company),
       ]);
-    res.json({ datasets, sampleDatasets, models, predictions, storedImages, trainingRunsThisMonth, predictionsThisMonth });
+    res.json({ datasets, sampleDatasets, models, predictions, storedImages, trainingRunsThisMonth, predictionsThisMonth, path });
   } catch (error) {
     console.error('Error getting learning progress:', error);
     res.status(500).json({ error: 'Could not load learning progress', message: error.message });

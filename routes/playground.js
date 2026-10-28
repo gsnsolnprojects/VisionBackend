@@ -11,6 +11,7 @@ const {
   deleteReport,
   startPracticeAutoLabel,
   getPracticeAutoLabel,
+  practiceDone,
 } = require('../controllers/playgroundController');
 
 /** Playground tests and reports (controllers/playgroundController.js) */
@@ -24,6 +25,7 @@ router.get('/reports/:id/csv', authenticateToken, requirePermission('viewInferen
 router.get('/reports/:id/preview', authenticateToken, requirePermission('viewInferenceResults'), reportPreview);
 router.delete('/reports/:id', authenticateToken, requirePermission('runInference'), deleteReport);
 router.post('/practice/auto-label', authenticateToken, requirePermission('runInference'), startPracticeAutoLabel);
+router.post('/practice/done', authenticateToken, requirePermission('viewProjects'), practiceDone);
 router.get('/practice/auto-label/:inferenceId', authenticateToken, requirePermission('viewInferenceResults'), getPracticeAutoLabel);
 
 module.exports = router;

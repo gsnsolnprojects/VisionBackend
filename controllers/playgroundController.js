@@ -12,6 +12,7 @@ const { inferenceQueue } = require('../queue');
 const { resolveModelCheckpointPath } = require('../services/resolveModelCheckpoint');
 const { SAMPLE_COMPANY } = require('../services/sampleLibraryService');
 const { canAccessAllWorkspaces } = require('../utils/workspaceScoping');
+const { markPracticeDone } = require('../services/playgroundProgressService');
 const {
   closeRun,
   writeReport,
@@ -32,6 +33,7 @@ const {
  * DELETE /api/playground/reports/:id               delete a report early
  * POST   /api/playground/practice/auto-label        { datasetId, fileIds } run GSN's model on sample photos
  * GET    /api/playground/practice/auto-label/:inferenceId   progress, then the boxes it found
+ * POST   /api/playground/practice/done          label practice finished (unlocks the next challenge)
  */
 
 /** Learn to label: at most this many photos per auto-label run, and runs per company a day */
@@ -368,7 +370,19 @@ const getPracticeAutoLabel = async (req, res) => {
   }
 };
 
+/** Learn to label finished: saved for the company's challenge path */
+const practiceDone = async (req, res) => {
+  try {
+    if (!req.user?.company) return res.status(400).json({ error: 'No company', message: 'Create or join a company first.' });
+    res.json({ path: await markPracticeDone(req.user.company) });
+  } catch (error) {
+    console.error('[playground] practice done failed:', error);
+    res.status(500).json({ error: 'Could not save progress', message: error.message });
+  }
+};
+
 module.exports = {
+  practiceDone,
   closeTest,
   createReport,
   listReports,
