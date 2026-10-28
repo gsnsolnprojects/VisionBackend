@@ -5,6 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 const InferenceJob = require('../models/InferenceJob');
 const Model = require('../models/Model');
 const Dataset = require('../models/Dataset');
+const SampleLibraryItem = require('../models/SampleLibraryItem');
 const PlaygroundReport = require('../models/PlaygroundReport');
 const auditService = require('../services/auditService');
 const storageAdapter = require('../services/storageAdapter');
@@ -37,6 +38,7 @@ const {
  */
 
 /** Learn to label: at most this many photos per auto-label run, and runs per company a day */
+const PRACTICE_PROJECT = 'Learn to label';
 const PRACTICE_MAX_PHOTOS = 30;
 const PRACTICE_RUNS_PER_DAY = 10;
 const PRACTICE_CONFIDENCE = 0.4;
@@ -240,9 +242,10 @@ async function readyMadeModelFor(sample) {
 }
 
 /**
- * Learn to label: run GSN's ready-made model on a few photos of a linked GSN sample, so the
- * student can compare its boxes with the real labels. The student's practice labels never
- * reach the server; this only reads GSN's photos.
+ * Learn to label: run GSN's ready-made model on a few photos of a GSN sample (the library sample
+ * itself, or a company's link to it), so the student can compare its boxes with the real labels.
+ * No project is needed. The student's practice labels never reach the server; this only reads
+ * GSN's photos.
  */
 const startPracticeAutoLabel = async (req, res) => {
   try {
@@ -254,22 +257,30 @@ const startPracticeAutoLabel = async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(String(datasetId || ''))) {
       return res.status(400).json({ error: 'Dataset not found', message: 'This dataset was not found.' });
     }
+    const company = req.user?.company;
+    if (!company) return res.status(400).json({ error: 'No company', message: 'Create or join a company first.' });
     const dataset = await Dataset.findById(datasetId);
-    if (!dataset || dataset.deletedAt || !ownsCompany(req, dataset.company)) {
+    if (!dataset || dataset.deletedAt) {
       return res.status(404).json({ error: 'Dataset not found', message: 'This dataset was not found.' });
     }
-    if (!dataset.linkedFrom) {
+    // A library sample, or the company's own link to one
+    let source = null;
+    if (dataset.company === SAMPLE_COMPANY && (await SampleLibraryItem.exists({ datasetId: dataset._id, isVisible: true }))) {
+      source = dataset;
+    } else if (ownsCompany(req, dataset.company) && dataset.linkedFrom) {
+      source = await Dataset.findById(dataset.linkedFrom).select('project version').lean();
+    } else if (ownsCompany(req, dataset.company)) {
       return res.status(400).json({ error: 'Not a GSN sample', message: 'Label practice works on GSN sample datasets only.' });
     }
+    if (!source) return res.status(404).json({ error: 'Dataset not found', message: 'This dataset was not found.' });
 
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const runsToday = await InferenceJob.countDocuments({ company: dataset.company, purpose: 'practice', createdAt: { $gte: since } });
+    const runsToday = await InferenceJob.countDocuments({ company, purpose: 'practice', createdAt: { $gte: since } });
     if (runsToday >= PRACTICE_RUNS_PER_DAY) {
       return res.status(429).json({ error: 'Too many runs', message: 'You have used today\'s auto-label practice runs. Try again tomorrow.' });
     }
 
-    const source = await Dataset.findById(dataset.linkedFrom).select('project version').lean();
-    const model = source ? await readyMadeModelFor(source) : null;
+    const model = await readyMadeModelFor(source);
     if (!model) {
       return res.status(404).json({ error: 'No ready-made model', message: "GSN doesn't have a ready-made model for this sample yet." });
     }
@@ -293,8 +304,8 @@ const startPracticeAutoLabel = async (req, res) => {
     const job = await InferenceJob.create({
       inferenceId,
       modelId: model._id,
-      company: dataset.company,
-      project: dataset.project,
+      company,
+      project: PRACTICE_PROJECT,
       sourceType: 'custom_folder',
       customFolderPath: folder,
       status: 'queued',
@@ -308,8 +319,8 @@ const startPracticeAutoLabel = async (req, res) => {
       {
         inferenceId,
         modelId: model._id.toString(),
-        company: dataset.company,
-        project: dataset.project,
+        company,
+        project: PRACTICE_PROJECT,
         sourceType: 'custom_folder',
         customFolderPath: folder,
         confidenceThreshold: PRACTICE_CONFIDENCE,

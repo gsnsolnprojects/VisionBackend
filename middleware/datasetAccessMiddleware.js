@@ -1,6 +1,21 @@
 const mongoose = require('mongoose');
 const Dataset = require('../models/Dataset');
+const SampleLibraryItem = require('../models/SampleLibraryItem');
+const { SAMPLE_COMPANY } = require('../services/sampleLibraryService');
 const { validateWorkspaceAccess, canAccessAllWorkspaces } = require('../utils/workspaceScoping');
+
+/**
+ * Reads that Learn to label makes on a GSN sample without a project: the photo list, one photo,
+ * its thumbnail and the labels. Allowed (GET only) for customers with an active plan on samples
+ * the library shows; the request is marked req.sampleRead so the handlers skip their own
+ * company check.
+ */
+const SAMPLE_READS = /^\/(files|file-labels|file\/[^/]+(\/thumbnail)?)\/?$/;
+
+async function isVisibleSample(dataset) {
+  if (dataset.company !== SAMPLE_COMPANY) return false;
+  return !!(await SampleLibraryItem.exists({ datasetId: dataset._id, isVisible: true }));
+}
 
 /**
  * Company check for every /api/dataset/:datasetId/... route (files, images, thumbnails,
@@ -21,6 +36,16 @@ async function datasetAccess(req, res, next) {
     if (!dataset) return next();
 
     const access = validateWorkspaceAccess(req.user, dataset.company);
+    if (
+      !access.allowed &&
+      req.method === 'GET' &&
+      SAMPLE_READS.test(req.path) &&
+      req.user.access?.mode === 'full' &&
+      (await isVisibleSample(dataset))
+    ) {
+      req.sampleRead = true;
+      return next();
+    }
     if (!access.allowed) {
       return res.status(403).json({
         error: 'Permission denied',

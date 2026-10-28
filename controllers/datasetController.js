@@ -1047,7 +1047,8 @@ const getDatasetFiles = async (req, res) => {
     }
 
     // Only the dataset's own company (or the platform admin) may see its files
-    if (!canAccessAllWorkspaces(req.user)) {
+    // req.sampleRead: a GSN library sample opened for Learn to label (middleware/datasetAccessMiddleware.js)
+    if (!canAccessAllWorkspaces(req.user) && !req.sampleRead) {
       const accessValidation = validateWorkspaceAccess(req.user, dataset.company);
       if (!accessValidation.allowed) {
         return res.status(403).json({
@@ -1136,7 +1137,8 @@ const getFileThumbnail = async (req, res) => {
     }
 
     // Only the dataset's own company (or the platform admin) may see its files
-    if (!canAccessAllWorkspaces(req.user)) {
+    // req.sampleRead: a GSN library sample opened for Learn to label (middleware/datasetAccessMiddleware.js)
+    if (!canAccessAllWorkspaces(req.user) && !req.sampleRead) {
       const accessValidation = validateWorkspaceAccess(req.user, dataset.company);
       if (!accessValidation.allowed) {
         return res.status(403).json({
@@ -1284,7 +1286,8 @@ const getFile = async (req, res) => {
     }
 
     // Only the dataset's own company (or the platform admin) may see its files
-    if (!canAccessAllWorkspaces(req.user)) {
+    // req.sampleRead: a GSN library sample opened for Learn to label (middleware/datasetAccessMiddleware.js)
+    if (!canAccessAllWorkspaces(req.user) && !req.sampleRead) {
       const accessValidation = validateWorkspaceAccess(req.user, dataset.company);
       if (!accessValidation.allowed) {
         return res.status(403).json({
