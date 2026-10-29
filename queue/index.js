@@ -141,6 +141,7 @@ function getQueues() {
 
 module.exports = {
   initQueues,
+  getRedisConfig,
   // ✅ Export queues as getters (lazy initialization)
   // This allows controllers to import queues directly
   get trainingQueue() {

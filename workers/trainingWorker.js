@@ -22,22 +22,9 @@ const Bull = require('bull');
 const { BlobServiceClient } = require('@azure/storage-blob');
 const os = require('os');
 
-const redisConfig = process.env.REDIS_HOST
-  ? {
-      host: process.env.REDIS_HOST,
-      port: Number(process.env.REDIS_PORT || 6380),
-      password: process.env.REDIS_PASSWORD,
-      username: null,
-      tls: {},
-      enableReadyCheck: false,
-      maxRetriesPerRequest: null,
-    }
-  : {
-      host: '127.0.0.1',
-      port: 6379,
-      enableReadyCheck: false,
-      maxRetriesPerRequest: null,
-    };
+// Same Redis settings as the API's queues: TLS only for Azure Redis (host + password) or REDIS_TLS,
+// so the plain "redis" container on the server works too
+const redisConfig = require('../queue').getRedisConfig();
     const trainingQueue = new Bull('train-model', {
       redis: redisConfig,
     });
