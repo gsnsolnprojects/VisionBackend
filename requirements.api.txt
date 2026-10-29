@@ -17,3 +17,5 @@ onnx
 opencv-python-headless
 numpy
 pillow
+# Photo augmentation (image_data_augmentation/), run by the preprocessing worker
+albumentations==2.0.8
