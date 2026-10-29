@@ -1308,6 +1308,11 @@ const convertAnnotationsToYOLO = async (req, res) => {
           await fs.writeFile(fullLabelPath, '', 'utf8'); // Empty file
           emptyLabelsCreated++;
           labelFilesCreated++;
+          // A good photo is labelled too ("no defect"): it joins the train/val/test split below
+          // and teaches the model what a normal part looks like
+          image.hasLabels = true;
+          image.convertedAt = new Date();
+          await image.save();
         } else {
           // Track unannotated images for response
           unannotatedImageList.push({
