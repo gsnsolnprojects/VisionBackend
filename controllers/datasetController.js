@@ -16,6 +16,12 @@ const { preprocessingQueue, augmentationQueue } = require('../queue');
 const { generateDataYaml, getLabelFilePath } = require('../utils/yoloConverter');
 const auditService = require('../services/auditService');
 const { buildWorkspaceFilter, validateWorkspaceAccess, canAccessAllWorkspaces } = require('../utils/workspaceScoping');
+const {
+  isGsnUser,
+  countLabelledPhotos,
+  CUSTOMER_MIN_LABELLED,
+  CUSTOMER_AUGMENT_MAX,
+} = require('../middleware/customerAccessMiddleware');
 const { sanitizeString } = require('../middleware/xssSanitizer');
 
 /** Map an Image row to train / val / test using folder name or storedPath. */
@@ -2424,6 +2430,20 @@ const startAugmentation = async (req, res) => {
       });
     }
 
+    // Customers keep one augmented version per dataset: a new one replaces it (frees its name too)
+    if (!isGsnUser(req.user) && !dataset.isAugmented) {
+      const previous = await Dataset.find({ parentDatasetId: dataset._id, isAugmented: true, deletedAt: null });
+      if (previous.some((old) => old.augmentationStatus === 'running' || old.status === 'processing')) {
+        return res.status(409).json({ error: 'More photos are already being made for this dataset.' });
+      }
+      for (const old of previous) {
+        await deleteDatasetFiles(old);
+        old.deletedAt = new Date();
+        old.isActive = false;
+        await old.save();
+      }
+    }
+
     // Validate and sanitize versionName (required for augmentation)
     const versionName = typeof rawVersionName === 'string' ? rawVersionName.trim() : '';
     if (!versionName) {
@@ -2459,18 +2479,40 @@ const startAugmentation = async (req, res) => {
     }
 
     // Prepare options with safe defaults
-    const targetTrainTotal =
+    let targetTrainTotal =
       typeof options?.targetTrainTotal === 'number' && options.targetTrainTotal > 0
         ? options.targetTrainTotal
         : 0; // 0 means "let worker decide" (may use augmentationMultiplier or default)
-    const valTestMultiplier =
+    let valTestMultiplier =
       typeof options?.valTestMultiplier === 'number' && options.valTestMultiplier > 0
         ? options.valTestMultiplier
         : 2;
-    const augmentationMultiplier =
+    let augmentationMultiplier =
       typeof options?.augmentationMultiplier === 'number' && options.augmentationMultiplier > 0
         ? options.augmentationMultiplier
         : null;
+
+    // Customers (Playground): their own labelled dataset only, up to CUSTOMER_AUGMENT_MAX photos in
+    // all, extra copies for training only (held-out photos stay real), one augmented version per
+    // dataset (a new one replaces it)
+    if (!isGsnUser(req.user)) {
+      if (dataset.isAugmented) {
+        return res.status(400).json({ error: 'Make more photos from the original dataset, not from an augmented one.' });
+      }
+      const labelled = await countLabelledPhotos(dataset);
+      if (labelled < CUSTOMER_MIN_LABELLED) {
+        return res.status(400).json({
+          error: `Label at least ${CUSTOMER_MIN_LABELLED} photos first (${labelled} so far).`,
+        });
+      }
+      // The target is the labelled photos in all after augmenting (the worker copies labelled photos only)
+      targetTrainTotal = Math.min(targetTrainTotal || CUSTOMER_AUGMENT_MAX, CUSTOMER_AUGMENT_MAX);
+      if (targetTrainTotal <= labelled) {
+        return res.status(400).json({ error: `This dataset already has ${CUSTOMER_AUGMENT_MAX} labelled photos or more.` });
+      }
+      valTestMultiplier = 1;
+      augmentationMultiplier = null;
+    }
 
     // Optional: scope augmentation to a subset of images (e.g. a newly added-and-labeled
     // batch) instead of the whole dataset. When present, targetTrainTotal above means
@@ -2500,6 +2542,7 @@ const startAugmentation = async (req, res) => {
       valTestMultiplier,
       augmentationMultiplier,
       imageIds,
+      copiesForTrainingOnly: !isGsnUser(req.user),
     };
 
     const job = await augmentationQueue.add(jobPayload, {

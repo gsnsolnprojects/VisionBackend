@@ -74,11 +74,8 @@ function runPythonAugmentation({
 }) {
   return new Promise((resolve, reject) => {
     const pythonBin = process.env.AUG_PYTHON_BIN || 'python';
-    const scriptPath = path.join(
-      process.cwd(),
-      'image_data_augmentation',
-      'run_augmentation.py',
-    );
+    // Next to the code, not the working folder (on the server that's /data, the code is in /app)
+    const scriptPath = path.join(__dirname, '..', 'image_data_augmentation', 'run_augmentation.py');
 
     const args = [
       scriptPath,
@@ -180,11 +177,7 @@ function runPythonAugmentation({
 function runPythonFixLabels({ labelsRoot }) {
   return new Promise((resolve) => {
     const pythonBin = process.env.AUG_PYTHON_BIN || 'python';
-    const scriptPath = path.join(
-      process.cwd(),
-      'image_data_augmentation',
-      'fix_labels.py',
-    );
+    const scriptPath = path.join(__dirname, '..', 'image_data_augmentation', 'fix_labels.py');
 
     const args = [scriptPath, labelsRoot];
 
@@ -274,6 +267,9 @@ const processAugmentationJob = async (job) => {
     targetSize,
     augmentationMultiplier,
     imageIds,
+    // Playground: the originals keep their own split and every new copy goes to training, so no
+    // copy of a held-out photo is trained on (scores stay honest)
+    copiesForTrainingOnly = false,
   } = job.data || {};
 
   console.log('[AUGMENT-WORKER] Processing augmentation job', {
@@ -567,6 +563,7 @@ const processAugmentationJob = async (job) => {
       ...scopedPool.map((p) => ({ ...p })),
     ];
     const combinedNames = new Set(combinedList.map((p) => p.storedName.toLowerCase()));
+    const originalsCount = combinedList.length;
     let scopedCount = scopedPool.length;
 
     try {
@@ -598,7 +595,10 @@ const processAugmentationJob = async (job) => {
     }
 
     // ---------- 5. Canonical split once (same seed/ratios as preprocessing and post-annotation) ----------
-    let { train: trainList, val: valList, test: testList } = splitDataset(combinedList, originalDataset);
+    let { train: trainList, val: valList, test: testList } = copiesForTrainingOnly
+      ? splitDataset(combinedList.slice(0, originalsCount), originalDataset)
+      : splitDataset(combinedList, originalDataset);
+    if (copiesForTrainingOnly) trainList = [...trainList, ...combinedList.slice(originalsCount)];
 
     // ✅ Hard guarantee: no filename in more than one split (defensive; splitDataset is already disjoint by item)
     const enforceDisjointByFilename = (train, val, test) => {

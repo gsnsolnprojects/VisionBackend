@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const Dataset = require('../models/Dataset');
+const Image = require('../models/Image');
 const Model = require('../models/Model');
 const TrainingJob = require('../models/TrainingJob');
 const { countTrainingRunsThisMonth } = require('../utils/usage');
@@ -13,7 +14,7 @@ const { countTrainingRunsThisMonth } = require('../utils/usage');
  *  - they can create projects, train models and run inference (also on uploaded images)
  *  - with trainOnOwnDatasets they can upload a dataset and add/delete its files, label it
  *    and edit its classes (plan limits on count, images and file size: utils/datasetAllowance)
- *  - they can't augment or duplicate datasets
+ *  - they can augment their own labelled datasets (up to CUSTOMER_AUGMENT_MAX photos), not duplicate
  *  - they can train only nano or small models, at most CUSTOMER_MODEL_LIMIT per company
  *    (deleting a model frees its slot; linked sample models don't count), and no more than
  *    the plan's trainingRunsPerMonth
@@ -25,18 +26,17 @@ const { countTrainingRunsThisMonth } = require('../utils/usage');
 const GSN_COMPANY = 'gsn';
 const CUSTOMER_MODEL_LIMIT = 2;
 const CUSTOMER_MODEL_SIZES = ['n', 's'];
-/** Labelled photos a customer dataset needs before it can be trained on */
+/** Labelled photos a customer dataset needs before it can be trained on (or augmented) */
 const CUSTOMER_MIN_LABELLED = 20;
+/** Photos an augmented customer dataset may hold in all */
+const CUSTOMER_AUGMENT_MAX = 500;
 
 const isGsnUser = (user) => String(user?.company || '').trim().toLowerCase() === GSN_COMPANY;
 
 const DATASET_ROUTE = /^\/api\/dataset\/([^/]+)(\/.*)?$/;
 
 /** Dataset requests only GSN may make (method + path after /api/dataset) */
-const GSN_ONLY = [
-  ['POST', /^\/[^/]+\/augment$/],
-  ['POST', /^\/[^/]+\/duplicate$/],
-];
+const GSN_ONLY = [['POST', /^\/[^/]+\/duplicate$/]];
 
 /** Work on a company's own dataset, open to customers whose plan has trainOnOwnDatasets */
 const OWN_DATASET_WORK = [
@@ -54,6 +54,8 @@ const OWN_DATASET_WORK = [
   ['POST', /^\/[^/]+\/categories$/],
   ['PUT', /^\/[^/]+\/categories\/[^/]+$/],
   ['DELETE', /^\/[^/]+\/categories\/[^/]+$/],
+  // More training photos from your own labels (limits in datasetController.startAugmentation)
+  ['POST', /^\/[^/]+\/augment$/],
 ];
 
 /** Requests on one dataset that leave the dataset unchanged, so they're fine on a linked one */
@@ -62,7 +64,7 @@ const LINK_SAFE = [
   ['POST', /^\/[^/]+\/augment\/cancel$/],
 ];
 
-const GSN_ONLY_MESSAGE = 'Augmenting and duplicating datasets is not available in your workspace.';
+const GSN_ONLY_MESSAGE = 'Duplicating datasets is not available in your workspace.';
 const SAMPLE_ONLY_MESSAGE =
   'Your workspace works with GSN sample datasets. Add one with "Add sample dataset"; uploading, labelling and editing datasets is not available.';
 const LINKED_READ_ONLY_MESSAGE =
@@ -118,6 +120,15 @@ async function customerAccess(req, res, next) {
   }
 }
 
+/**
+ * Photos of a dataset that really have labels. Dataset.labeledImages can't be trusted for this
+ * (a later recount sets it to every photo); an augmented version's photos are all labelled.
+ */
+async function countLabelledPhotos(dataset) {
+  if (dataset.isAugmented) return dataset.labeledImages || dataset.totalImages || 0;
+  return Image.countDocuments({ datasetId: dataset._id, hasLabels: true });
+}
+
 /** Models a customer company has trained itself (linked sample models don't count) */
 const countOwnModels = (company) => Model.countDocuments({ company, linkedFrom: null });
 
@@ -148,8 +159,7 @@ async function checkCustomerTraining(user, { modelType, modelSize, modelKey, bas
       message: 'GSN\'s labelled samples are for viewing and testing. To train, label the sample yourself or upload your own photos.',
     };
   }
-  // Set by photo preparation (uploaded labels) and by converting labels drawn in the app
-  const labelled = dataset?.labeledImages || 0;
+  const labelled = dataset ? await countLabelledPhotos(dataset) : 0;
   if (dataset && labelled < CUSTOMER_MIN_LABELLED) {
     return { status: 400, message: `Label at least ${CUSTOMER_MIN_LABELLED} photos before training (${labelled} so far).` };
   }
@@ -186,6 +196,9 @@ module.exports = {
   GSN_COMPANY,
   CUSTOMER_MODEL_LIMIT,
   CUSTOMER_MODEL_SIZES,
+  CUSTOMER_MIN_LABELLED,
+  CUSTOMER_AUGMENT_MAX,
+  countLabelledPhotos,
   isGsnUser,
   customerAccess,
   checkCustomerTraining,

@@ -79,8 +79,17 @@ async function keepDeletedUsage({ trainingJobs = [], inferenceJobs = [] }) {
   }
 }
 
-/** The company's own datasets (GSN sample links and samples it labels itself don't count) */
-const ownDatasetFilter = (company) => ({ company, deletedAt: null, linkedFrom: null, labelledSampleOf: null });
+/**
+ * The company's own datasets. Not counted: GSN sample links, samples it labels itself, and
+ * augmented versions (extra training photos made from one of its datasets).
+ */
+const ownDatasetFilter = (company) => ({
+  company,
+  deletedAt: null,
+  linkedFrom: null,
+  labelledSampleOf: null,
+  isAugmented: { $ne: true },
+});
 
 /** Images stored in the company's own datasets */
 async function countStoredImages(company) {
