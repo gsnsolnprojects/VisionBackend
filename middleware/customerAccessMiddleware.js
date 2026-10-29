@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const mongoose = require('mongoose');
 const Dataset = require('../models/Dataset');
 const Image = require('../models/Image');
@@ -126,6 +128,23 @@ async function customerAccess(req, res, next) {
  */
 async function countLabelledPhotos(dataset) {
   if (dataset.isAugmented) return dataset.labeledImages || dataset.totalImages || 0;
+  // The label files on disk are what training uses (an empty one = a photo marked good), and what
+  // the app shows as labelled; the per-photo hasLabels flag can lag behind them
+  const names = new Set();
+  const walk = async (dir) => {
+    let entries;
+    try {
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const ent of entries) {
+      if (ent.isDirectory()) await walk(path.join(dir, ent.name));
+      else if (ent.name.toLowerCase().endsWith('.txt')) names.add(ent.name.slice(0, -4).toLowerCase());
+    }
+  };
+  if (dataset.storagePath) await walk(path.join(dataset.storagePath, 'labels'));
+  if (names.size > 0) return names.size;
   return Image.countDocuments({ datasetId: dataset._id, hasLabels: true });
 }
 
