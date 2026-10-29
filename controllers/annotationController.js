@@ -1231,7 +1231,9 @@ const importLabelsToAnnotations = async (req, res) => {
 const convertAnnotationsToYOLO = async (req, res) => {
   try {
     const { datasetId } = req.params;
-    const { imageIds, createEmptyLabels = false, modelType = 'YOLO' } = req.body; // Optional: if provided, convert only those images. createEmptyLabels: create empty .txt for unannotated images
+    const { imageIds, createEmptyLabels = false, modelType = 'YOLO', unannotatedImageIds } = req.body; // Optional: if provided, convert only those images. createEmptyLabels: create empty .txt for unannotated images
+    // Photos the user confirmed as good ("the images without annotations are good images? Yes")
+    const goodImageIds = new Set((Array.isArray(unannotatedImageIds) ? unannotatedImageIds : []).map(String));
     const exportMode = modelType === 'YOLO_SEG' ? 'segment' : 'detect';
 
     // Validate datasetId
@@ -1303,7 +1305,7 @@ const convertAnnotationsToYOLO = async (req, res) => {
 
       // ✅ Handle images with no annotations
       if (!annotations || annotations.length === 0) {
-        if (createEmptyLabels) {
+        if (createEmptyLabels || goodImageIds.has(String(image._id))) {
           // ✅ Create empty label file (good image)
           await fs.writeFile(fullLabelPath, '', 'utf8'); // Empty file
           emptyLabelsCreated++;
