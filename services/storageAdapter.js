@@ -313,6 +313,32 @@ class StorageAdapter {
    * @param {string} srcPath - Source file path
    * @param {string} destPath - Destination file path
    */
+  /**
+   * Put a second name on a photo without using more disk: a hard link where the disk allows
+   * it, else a plain copy (Azure, other drives). Only for files nobody rewrites in place
+   * (photos); a link and its source share their content.
+   */
+  async linkOrCopyFile(srcPath, destPath) {
+    if (this.mode === 'local') {
+      await this.ensureDir(path.dirname(destPath));
+      try {
+        await fs.link(srcPath, destPath);
+        return;
+      } catch (error) {
+        if (error.code === 'EEXIST') {
+          await fs.unlink(destPath);
+          try {
+            await fs.link(srcPath, destPath);
+            return;
+          } catch {
+            // fall back to a copy below
+          }
+        }
+      }
+    }
+    await this.copyFile(srcPath, destPath);
+  }
+
   async copyFile(srcPath, destPath) {
     if (this.mode === 'local') {
       // ✅ Ensure destination directory exists

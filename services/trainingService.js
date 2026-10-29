@@ -242,9 +242,10 @@ function canRetryJob(status) {
  */
 const LIVE_TRAINING_WINDOW_MS = 10 * 60 * 1000;
 
-async function findLiveTrainingJob() {
+async function findLiveTrainingJob(company) {
   const cutoff = new Date(Date.now() - LIVE_TRAINING_WINDOW_MS);
   return TrainingJob.findOne({
+    ...(company ? { company } : {}),
     status: { $in: ['queued', 'running'] },
     $or: [
       { createdAt: { $gte: cutoff } },

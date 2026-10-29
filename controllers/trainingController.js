@@ -379,17 +379,18 @@ const getDefaultHyperparameters = async (req, res) => {
 };
 
 /**
- * Block a second training start while this server already has a live job.
+ * Block a second training start while the same company already has a live job. Other
+ * companies' jobs don't block: they wait in the queue.
  * Returns true if a 409 was already sent.
  */
-async function respondIfTrainingBusy(res) {
+async function respondIfTrainingBusy(res, company) {
   try {
     const [active, waiting, delayed] = await Promise.all([
       trainingQueue.getActive(),
       trainingQueue.getWaiting(),
       trainingQueue.getDelayed()
     ]);
-    const busy = [...active, ...waiting, ...delayed];
+    const busy = [...active, ...waiting, ...delayed].filter((j) => j?.data?.company === company);
     if (busy.length > 0) {
       const existingJobId = busy[0]?.data?.jobId || null;
       res.status(409).json({
@@ -404,7 +405,7 @@ async function respondIfTrainingBusy(res) {
     console.warn('[training] Could not inspect queue:', err.message);
   }
 
-  const live = await trainingService.findLiveTrainingJob();
+  const live = await trainingService.findLiveTrainingJob(company);
   if (live) {
     res.status(409).json({
       error: `A training job is already ${live.status} (${live.jobId}). Cancel it before starting another.`,
@@ -609,6 +610,7 @@ const startTraining = async (req, res) => {
       modelSize: normalizedModelSize,
       modelKey: finalModelKey,
       baseModel: trainedModel,
+      dataset,
     });
     if (customerBlock) {
       return res.status(customerBlock.status).json({ error: customerBlock.message, message: customerBlock.message });
@@ -650,7 +652,7 @@ const startTraining = async (req, res) => {
       }
     }
 
-    if (await respondIfTrainingBusy(res)) {
+    if (await respondIfTrainingBusy(res, dataset.company)) {
       return;
     }
 
@@ -821,7 +823,8 @@ const getTrainingStatus = async (req, res) => {
  */
 const getActiveTraining = async (req, res) => {
   try {
-    const live = await trainingService.findLiveTrainingJob();
+    // Several companies can train at once: look for this user's own company's job
+    const live = await trainingService.findLiveTrainingJob(canAccessAllWorkspaces(req.user) ? null : req.user.company);
     if (!live) {
       return res.status(200).json({ jobId: null });
     }
@@ -987,12 +990,13 @@ const retryTraining = async (req, res) => {
       modelSize: originalJob.modelSize,
       modelKey: originalJob.modelKey,
       baseModel: retryBase,
+      dataset: await Dataset.findById(originalJob.datasetId).lean(),
     });
     if (customerBlock) {
       return res.status(customerBlock.status).json({ error: customerBlock.message, message: customerBlock.message });
     }
 
-    if (await respondIfTrainingBusy(res)) {
+    if (await respondIfTrainingBusy(res, originalJob.company)) {
       return;
     }
 

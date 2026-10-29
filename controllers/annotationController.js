@@ -1409,11 +1409,16 @@ const convertAnnotationsToYOLO = async (req, res) => {
           const labelMoved = path.resolve(srcLabel) !== path.resolve(destLabel);
 
           if (imageMoved && (await storageAdapter.exists(srcImage))) {
-            await storageAdapter.copyFile(srcImage, destImage);
+            // A rename keeps a hard-linked photo (a sample labelled yourself) a link, not a copy
             try {
-              await fs.unlink(srcImage);
-            } catch (e) {
-              // ignore if delete fails (e.g. read-only)
+              await fs.rename(srcImage, destImage);
+            } catch {
+              await storageAdapter.copyFile(srcImage, destImage);
+              try {
+                await fs.unlink(srcImage);
+              } catch (e) {
+                // ignore if delete fails (e.g. read-only)
+              }
             }
           }
           if (labelMoved && (await storageAdapter.exists(srcLabel))) {

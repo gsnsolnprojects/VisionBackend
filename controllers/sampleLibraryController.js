@@ -1,6 +1,11 @@
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const Dataset = require('../models/Dataset');
+const Category = require('../models/Category');
+const storageAdapter = require('../services/storageAdapter');
+const { preprocessingQueue } = require('../queue');
+const { isPlaygroundHiddenClass } = require('../services/playgroundRunService');
 const Model = require('../models/Model');
 const SampleLibraryItem = require('../models/SampleLibraryItem');
 const { copyDataset } = require('../services/datasetCopyService');
@@ -206,6 +211,136 @@ const importSampleDataset = async (req, res) => {
   }
 };
 
+/** Data-augmentation copies in a sample ("..._aug_3.jpg"): left out when labelling it yourself */
+const AUGMENTED_COPY = /_aug_\d+/i;
+
+/**
+ * POST /api/samples/datasets/:datasetId/label-yourself  { project }
+ *
+ * A GSN sample's photos without GSN's labels, in the caller's project, for them to label and
+ * train on. The photos are hard links into GSN's folder (no extra disk; a plain copy where a
+ * link can't be made), so it goes through the same preparation, labelling and training as an
+ * upload, but doesn't count as one of the company's own datasets (utils/usage ownDatasetFilter).
+ */
+const labelSampleYourself = async (req, res) => {
+  try {
+    const target = await resolveTargetProject(req);
+    if (target.status) return res.status(target.status).json({ error: 'Cannot add sample', message: target.message });
+    const isGsn = String(req.user.company || '').trim().toLowerCase() === SAMPLE_COMPANY;
+    if (!isGsn && req.user.access?.features?.trainOnOwnDatasets !== true) {
+      const message = 'Your plan doesn\'t include labelling and training your own datasets.';
+      return res.status(403).json({ error: message, message });
+    }
+
+    const item = await SampleLibraryItem.findOne({ datasetId: req.params.datasetId, isVisible: true })
+      .lean()
+      .catch(() => null);
+    const source = item ? await Dataset.findOne({ ...readyGsnDatasetFilter, _id: item.datasetId }) : null;
+    if (!source || !isOnThisServer(source)) {
+      return res.status(404).json({ error: 'Not found', message: 'This sample dataset is no longer available' });
+    }
+
+    const already = await Dataset.findOne({
+      company: target.company,
+      project: target.project,
+      labelledSampleOf: source._id,
+      deletedAt: null,
+    })
+      .select('_id version')
+      .lean();
+    if (already) {
+      return res.status(409).json({
+        error: 'Already added',
+        message: `You're already labelling this sample in ${target.project} as "${already.version}"`,
+        datasetId: String(already._id),
+      });
+    }
+
+    const images = source.files.filter((f) => f.type === 'image' && f.storedPath);
+    const originals = images.filter((f) => !AUGMENTED_COPY.test(f.storedName || f.storedPath));
+    const photos = originals.length > 0 ? originals : images;
+    if (photos.length === 0) return res.status(400).json({ error: 'No photos', message: 'This sample has no photos' });
+
+    const version = await uniqueName(`${toSafeName(item.name, 'sample')}-my-labels`, async (name) =>
+      !!(await Dataset.exists({ company: target.company, project: target.project, version: name, deletedAt: null }))
+    );
+    const dataset = new Dataset({
+      company: target.company,
+      project: target.project,
+      version,
+      storagePath: storageAdapter.buildDatasetPath(target.company, target.project, version),
+      status: 'uploaded',
+      files: [],
+      labelledSampleOf: source._id,
+    });
+    await dataset.save();
+    const datasetId = String(dataset._id);
+
+    // Same layout as an upload: images/dataset/<hash>.<ext>
+    const folder = path.join(storageAdapter.buildImagesPath(target.company, target.project, version), 'dataset');
+    await fs.promises.mkdir(folder, { recursive: true });
+    let totalSize = 0;
+    for (const f of photos) {
+      const ext = path.extname(f.storedName || f.storedPath).toLowerCase();
+      const storedName = `${crypto.createHash('sha256').update(`${datasetId}_${f.storedPath}`).digest('hex').slice(0, 12)}${ext}`;
+      const dest = path.join(folder, storedName);
+      const src = path.join(source.storagePath, f.storedPath);
+      try {
+        await fs.promises.link(src, dest);
+      } catch {
+        await fs.promises.copyFile(src, dest);
+      }
+      totalSize += f.size || 0;
+      dataset.files.push({
+        storedName,
+        originalName: f.originalName || storedName,
+        type: 'image',
+        size: f.size || 0,
+        folder: 'dataset',
+        storedPath: path.relative(dataset.storagePath, dest).replace(/\\/g, '/'),
+      });
+    }
+
+    // GSN's label names, so the labelling tool offers the same defects (minus Playground-hidden ones)
+    const categories = (await Category.getOrderedCategories(source._id)).filter(
+      (c) => isGsn || !isPlaygroundHiddenClass(c.name)
+    );
+    if (categories.length > 0) {
+      await Category.insertMany(
+        categories.map(({ _id, ...rest }, i) => ({ ...rest, datasetId: dataset._id, order: i }))
+      );
+    }
+
+    Object.assign(dataset, {
+      totalImages: photos.length,
+      sizeBytes: totalSize,
+      datasetType: 'unlabeled',
+      annotationStatus: 'pending',
+      labelSource: 'unlabeled',
+      unlabeledImagesCount: photos.length,
+      status: 'queued', // photo preparation, as after an upload
+    });
+    await dataset.save();
+    await preprocessingQueue.add(
+      { datasetId, storagePath: dataset.storagePath, company: target.company, project: target.project, version },
+      { attempts: 3, backoff: { type: 'exponential', delay: 2000 } }
+    );
+
+    auditService.logAction({
+      action: 'create',
+      resourceType: 'dataset',
+      resourceId: datasetId,
+      details: { company: target.company, project: target.project, change: 'sample to label yourself', sample: item.name, images: photos.length },
+      req,
+    });
+
+    res.status(201).json({ success: true, datasetId, project: target.project, version, images: photos.length });
+  } catch (error) {
+    console.error('[samples] label-yourself failed:', error);
+    res.status(500).json({ error: 'Could not add the sample to label', message: error.message });
+  }
+};
+
 const THUMB_MAX_PX = 480;
 const IMAGE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
 
@@ -337,4 +472,4 @@ const importSampleModel = async (req, res) => {
   }
 };
 
-module.exports = { listSamples, importSampleDataset, importSampleModel, getSampleDatasetThumbnail };
+module.exports = { listSamples, importSampleDataset, labelSampleYourself, importSampleModel, getSampleDatasetThumbnail };

@@ -772,6 +772,7 @@ const listDatasets = async (req, res) => {
         augmentedFromVersion: d.augmentedFromVersion || null,
         isLinkedSample: !!d.linkedFrom,
         linkedFrom: d.linkedFrom ? d.linkedFrom.toString() : null, // the GSN sample it links to
+        labelledSampleOf: d.labelledSampleOf ? d.labelledSampleOf.toString() : null, // GSN photos, own labels
         createdAt: d.createdAt,
         updatedAt: d.updatedAt
       });

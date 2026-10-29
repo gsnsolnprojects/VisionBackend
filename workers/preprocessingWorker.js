@@ -224,10 +224,10 @@ const processPreprocessingJob = async (job) => {
           ? `${logicalDatasetRoot}/${imageInfo.storedPath}`
           : path.join(datasetRoot, imageInfo.storedPath); // e.g., datasetRoot/images/good/storedName
         const destPath = path.join(trainImagesPath, imageInfo.storedName); // Flattened: train/images/storedName
-        
+
         // Check if source file exists
         if (await storageAdapter.exists(srcPath)) {
-          await storageAdapter.copyFile(srcPath, destPath); // Copy preserves original
+          await storageAdapter.linkOrCopyFile(srcPath, destPath); // Keeps the original, no second copy on disk
           trainCount++;
 
           // ✅ Copy corresponding label file using manifest (if exists)
@@ -325,10 +325,10 @@ const processPreprocessingJob = async (job) => {
           ? `${logicalDatasetRoot}/${imageInfo.storedPath}`
           : path.join(datasetRoot, imageInfo.storedPath); // e.g., datasetRoot/images/good/storedName
         const destPath = path.join(valImagesPath, imageInfo.storedName); // Flattened: val/images/storedName
-        
+
         // Check if source file exists
         if (await storageAdapter.exists(srcPath)) {
-          await storageAdapter.copyFile(srcPath, destPath); // Copy preserves original
+          await storageAdapter.linkOrCopyFile(srcPath, destPath); // Keeps the original, no second copy on disk
           valCount++;
 
           // ✅ Copy corresponding label file using manifest (if exists)
@@ -428,7 +428,7 @@ const processPreprocessingJob = async (job) => {
           const destPath = path.join(testImagesPath, imageInfo.storedName);
           
           if (await storageAdapter.exists(srcPath)) {
-            await storageAdapter.copyFile(srcPath, destPath);
+            await storageAdapter.linkOrCopyFile(srcPath, destPath);
             testCount++;
 
             // ✅ Extract image dimensions and create Image document
@@ -496,7 +496,7 @@ const processPreprocessingJob = async (job) => {
         const destPath = path.join(testImagesPath, imageInfo.storedName);
         
         if (await storageAdapter.exists(srcPath)) {
-          await storageAdapter.copyFile(srcPath, destPath);
+          await storageAdapter.linkOrCopyFile(srcPath, destPath);
           testImagesCopied++;
           alreadyAssignedNames.add(imageInfo.storedName);
 

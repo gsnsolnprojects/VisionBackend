@@ -217,6 +217,15 @@ const datasetSchema = new mongoose.Schema({
     index: true
   },
 
+  // A GSN sample's photos without GSN's labels, for the customer to label and train on.
+  // Its own folder holds hard links to the sample's photos (no extra disk), so it doesn't
+  // count towards the customer's own datasets or stored images.
+  labelledSampleOf: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Dataset',
+    default: null
+  },
+
   // Superadmin's pick of datasets to copy to the live (AWS) setup; only used locally
   publishToLive: {
     type: Boolean,

@@ -25,6 +25,8 @@ const { countTrainingRunsThisMonth } = require('../utils/usage');
 const GSN_COMPANY = 'gsn';
 const CUSTOMER_MODEL_LIMIT = 2;
 const CUSTOMER_MODEL_SIZES = ['n', 's'];
+/** Labelled photos a customer dataset needs before it can be trained on */
+const CUSTOMER_MIN_LABELLED = 20;
 
 const isGsnUser = (user) => String(user?.company || '').trim().toLowerCase() === GSN_COMPANY;
 
@@ -136,8 +138,21 @@ function sizeLetter(modelSize, modelKey) {
  * @param {Object} user - req.user
  * @param {{ modelType: string, modelSize?: string, modelKey?: string, baseModel?: Object|null }} job
  */
-async function checkCustomerTraining(user, { modelType, modelSize, modelKey, baseModel }) {
+async function checkCustomerTraining(user, { modelType, modelSize, modelKey, baseModel, dataset }) {
   if (isGsnUser(user)) return null;
+
+  // Customers train only on their own labels: an upload, or a GSN sample they labelled themselves
+  if (dataset?.linkedFrom) {
+    return {
+      status: 403,
+      message: 'GSN\'s labelled samples are for viewing and testing. To train, label the sample yourself or upload your own photos.',
+    };
+  }
+  // Set by photo preparation (uploaded labels) and by converting labels drawn in the app
+  const labelled = dataset?.labeledImages || 0;
+  if (dataset && labelled < CUSTOMER_MIN_LABELLED) {
+    return { status: 400, message: `Label at least ${CUSTOMER_MIN_LABELLED} photos before training (${labelled} so far).` };
+  }
 
   if (baseModel?.linkedFrom) {
     return { status: 403, message: 'Shared GSN sample models can\'t be trained further. Start from a base model instead.' };
