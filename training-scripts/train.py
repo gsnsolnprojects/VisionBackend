@@ -462,7 +462,12 @@ def train_yolo(config):
         import torch
         device = '0' if torch.cuda.is_available() else 'cpu'
         device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'
-        
+        if device == 'cpu':
+            # A small CPU server (2 vCPUs, a few GB for training): fewer loader processes and a
+            # smaller batch keep memory low without slowing it down
+            batch = min(batch, 8)
+            workers = min(workers, 1)
+
         train_args = {
             'data': data_yaml,
             'epochs': epochs,
