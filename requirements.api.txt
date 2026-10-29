@@ -2,8 +2,9 @@
 # Python packages for the API server image (CPU only).
 #
 # The API runs some Python itself: click-to-segment (SAM), live camera inference,
-# YOLO / RF-DETR class names and ONNX export. Training and batch inference run on
-# the separate GPU workers, which use requirements.gpu.txt + requirements.txt.
+# YOLO / RF-DETR class names and ONNX export. The same image runs the CPU workers on the
+# server: batch inference, dataset preparation and augmentation, and (until the GPU
+# server exists) YOLO training. GPU workers use requirements.gpu.txt + requirements.txt.
 #
 
 --extra-index-url https://download.pytorch.org/whl/cpu
@@ -17,5 +18,5 @@ onnx
 opencv-python-headless
 numpy
 pillow
-# Photo augmentation (image_data_augmentation/), run by the preprocessing worker
+# Dataset augmentation (image_data_augmentation/), run by the preprocessing worker
 albumentations==2.0.8
