@@ -61,7 +61,12 @@ const enforceDatasetAllowance = (kind) => async (req, res, next) => {
       const { datasetId } = req.params;
       if (mongoose.Types.ObjectId.isValid(datasetId)) {
         const dataset = await Dataset.findById(datasetId).select('totalImages').lean();
-        existingImages = dataset?.totalImages || 0;
+        // Extra training photos made from this dataset are files on disk too: they count
+        const [extra] = await Dataset.aggregate([
+          { $match: { parentDatasetId: new mongoose.Types.ObjectId(datasetId), isAugmented: true, deletedAt: null } },
+          { $group: { _id: null, images: { $sum: { $ifNull: ['$totalImages', 0] } } } },
+        ]);
+        existingImages = (dataset?.totalImages || 0) + (extra?.images || 0);
       }
     }
 

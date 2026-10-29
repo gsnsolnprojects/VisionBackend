@@ -94,7 +94,8 @@ const ownDatasetFilter = (company) => ({
 /** Images stored in the company's own datasets */
 async function countStoredImages(company) {
   const [row] = await Dataset.aggregate([
-    { $match: ownDatasetFilter(company) },
+    // Extra training photos (augmented versions) are files on disk too, so they count here
+    { $match: { ...ownDatasetFilter(company), isAugmented: { $in: [true, false, null] } } },
     { $group: { _id: null, images: { $sum: { $ifNull: ['$totalImages', 0] } } } },
   ]);
   return row?.images ?? 0;

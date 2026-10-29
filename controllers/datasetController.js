@@ -2505,10 +2505,17 @@ const startAugmentation = async (req, res) => {
           error: `Label at least ${CUSTOMER_MIN_LABELLED} photos first (${labelled} so far).`,
         });
       }
-      // The target is the labelled photos in all after augmenting (the worker copies labelled photos only)
-      targetTrainTotal = Math.min(targetTrainTotal || CUSTOMER_AUGMENT_MAX, CUSTOMER_AUGMENT_MAX);
+      // The target is the labelled photos in all after augmenting (the worker copies labelled photos only).
+      // Extra photos are files on disk, so the dataset's own photos plus them stay within the plan's
+      // photos per dataset; a sample you label yourself holds links to GSN's photos, which don't count.
+      const perDataset = req.user.access?.limits?.imagesPerDataset ?? CUSTOMER_AUGMENT_MAX;
+      const used = dataset.labelledSampleOf ? 0 : dataset.totalImages || 0;
+      const room = Math.min(CUSTOMER_AUGMENT_MAX, perDataset - used);
+      targetTrainTotal = Math.min(targetTrainTotal || room, room);
       if (targetTrainTotal <= labelled) {
-        return res.status(400).json({ error: `This dataset already has ${CUSTOMER_AUGMENT_MAX} labelled photos or more.` });
+        return res.status(400).json({
+          error: `No room for extra photos: this dataset uses ${used} of your ${perDataset} photos, and extra photos count towards them.`,
+        });
       }
       valTestMultiplier = 1;
       augmentationMultiplier = null;
