@@ -1,0 +1,33 @@
+# VisionBackend training worker for the GPU server (Node 20 + Python with NVIDIA CUDA PyTorch)
+#
+# Runs only workers/trainingWorker.js. Same layout as the API image (Dockerfile): code in /app,
+# working folder /data, which on the GPU server is the main server's data folder shared over
+# NFS, so datasets are read and models saved in the same place as before.
+# Needs the NVIDIA driver and container toolkit on the host (docker run --gpus all).
+
+FROM node:20-bookworm-slim
+
+ENV NODE_ENV=production \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:$PATH \
+    YOLO_CONFIG_DIR=/data/.ultralytics
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-venv libgl1 libglib2.0-0 ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && python3 -m venv /opt/venv
+
+WORKDIR /app
+
+COPY requirements.gpu-image.txt ./
+RUN pip install -r requirements.gpu-image.txt
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY . .
+
+WORKDIR /data
+CMD ["node", "/app/workers/trainingWorker.js"]

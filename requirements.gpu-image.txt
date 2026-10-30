@@ -1,0 +1,15 @@
+#
+# Python packages for the GPU training image (Dockerfile.gpu): the training worker on the GPU
+# server. Same versions as the API image (requirements.api.txt), with NVIDIA CUDA PyTorch; the
+# GPU server's NVIDIA driver provides the rest.
+#
+
+--extra-index-url https://download.pytorch.org/whl/cu126
+
+torch==2.9.1
+torchvision==0.24.1
+ultralytics==8.4.7
+opencv-python-headless
+numpy
+pillow
+pyyaml
