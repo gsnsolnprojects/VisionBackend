@@ -15,7 +15,7 @@ const Dataset = require('../models/Dataset');
 const Image = require('../models/Image');
 const Category = require('../models/Category');
 const storageAdapter = require('../services/storageAdapter');
-const { splitDataset } = require('../utils/splitDataset');
+const { splitDatasetByGroup } = require('../utils/splitDataset');
 const { getLabelFilePath } = require('../utils/yoloConverter');
 
 /**
@@ -267,8 +267,8 @@ const processAugmentationJob = async (job) => {
     targetSize,
     augmentationMultiplier,
     imageIds,
-    // Playground: the originals keep their own split and every new copy goes to training, so no
-    // copy of a held-out photo is trained on (scores stay honest)
+    // Playground: only the originals are split, and every new copy goes into the same split as
+    // the photo it was made from, so no copy of a held-out photo is trained on (scores stay honest)
     copiesForTrainingOnly = false,
   } = job.data || {};
 
@@ -569,6 +569,13 @@ const processAugmentationJob = async (job) => {
     try {
       const augImagesDir = path.join(outputPoolRoot, 'images', 'train');
       const augEntries = await fs.readdir(augImagesDir, { withFileTypes: true });
+      // Python can make a few more copies than needed (same number per photo); take copy 0 of
+      // every photo, then copy 1, ... so the extras trimmed below come evenly off all photos
+      const copyIndex = (name) => {
+        const m = path.parse(name).name.match(/_aug_(\d+)$/);
+        return m ? parseInt(m[1], 10) : 0;
+      };
+      augEntries.sort((a, b) => copyIndex(a.name) - copyIndex(b.name) || a.name.localeCompare(b.name));
       for (const entry of augEntries) {
         if (scopedCount >= desiredTotal) break;
         if (!entry.isFile()) continue;
@@ -595,10 +602,34 @@ const processAugmentationJob = async (job) => {
     }
 
     // ---------- 5. Canonical split once (same seed/ratios as preprocessing and post-annotation) ----------
+    // Photos with a defect and good photos (empty label file) are split separately, so both
+    // show up in train, val and test
+    for (const item of combinedList) {
+      let content = '';
+      try {
+        content = await fs.readFile(item.labelPath, 'utf8');
+      } catch {}
+      item.group = content.trim() ? 'defect' : 'good';
+    }
+    const groupOf = (item) => item.group;
     let { train: trainList, val: valList, test: testList } = copiesForTrainingOnly
-      ? splitDataset(combinedList.slice(0, originalsCount), originalDataset)
-      : splitDataset(combinedList, originalDataset);
-    if (copiesForTrainingOnly) trainList = [...trainList, ...combinedList.slice(originalsCount)];
+      ? splitDatasetByGroup(combinedList.slice(0, originalsCount), originalDataset, groupOf)
+      : splitDatasetByGroup(combinedList, originalDataset, groupOf);
+    if (copiesForTrainingOnly) {
+      // Each copy goes where its photo went ("board1_aug_3.jpg" is a copy of "board1.jpg")
+      const splitOfPhoto = new Map();
+      for (const [list, name] of [[trainList, 'train'], [valList, 'val'], [testList, 'test']]) {
+        for (const item of list) splitOfPhoto.set(path.parse(item.storedName).name.toLowerCase(), name);
+      }
+      const copiesBySplit = { train: [], val: [], test: [] };
+      for (const copy of combinedList.slice(originalsCount)) {
+        const photo = path.parse(copy.storedName).name.replace(/_aug_\d+$/, '').toLowerCase();
+        copiesBySplit[splitOfPhoto.get(photo) || 'train'].push(copy);
+      }
+      trainList = [...trainList, ...copiesBySplit.train];
+      valList = [...valList, ...copiesBySplit.val];
+      testList = [...testList, ...copiesBySplit.test];
+    }
 
     // ✅ Hard guarantee: no filename in more than one split (defensive; splitDataset is already disjoint by item)
     const enforceDisjointByFilename = (train, val, test) => {

@@ -149,10 +149,43 @@ function splitDataset(imageList, config) {
   return { train, val, test };
 }
 
+/**
+ * Same as splitDataset, but each group (e.g. photos with a defect vs good photos) is split
+ * on its own, so every group shows up in train, val and test in about the same proportion.
+ * Otherwise a small dataset can end up with no defect photos in val/test at all.
+ * @param {Array<Object>} imageList
+ * @param {Object} [config] - Optional split config from Dataset
+ * @param {function(Object): string} groupOf - Returns the group key for an item
+ * @returns {{ train: Array, val: Array, test: Array }}
+ */
+function splitDatasetByGroup(imageList, config, groupOf) {
+  if (!Array.isArray(imageList) || imageList.length === 0) {
+    return { train: [], val: [], test: [] };
+  }
+  const groups = new Map();
+  for (const item of imageList) {
+    const key = String(groupOf(item));
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  const train = [];
+  const val = [];
+  const test = [];
+  // Sorted keys so the result does not depend on which group came first
+  for (const key of Array.from(groups.keys()).sort()) {
+    const part = splitDataset(groups.get(key), config);
+    train.push(...part.train);
+    val.push(...part.val);
+    test.push(...part.test);
+  }
+  return { train, val, test };
+}
+
 module.exports = {
   DEFAULT_SPLIT_CONFIG,
   getSplitConfig,
   splitDataset,
+  splitDatasetByGroup,
   createSeededRng,
   seededShuffle,
 };

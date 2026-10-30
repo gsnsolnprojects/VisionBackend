@@ -343,7 +343,14 @@ def process_subset(
 
         had_labels = (len(bboxes) > 0) or (len(masks) > 0)
 
-        for i in range(count_per_image):
+        # A copy whose crop cut out every defect is thrown away, so try again with a new
+        # random crop (a few attempts per copy) instead of ending up short of the target
+        made = 0
+        attempts = 0
+        max_attempts = count_per_image * 5
+        while made < count_per_image and attempts < max_attempts:
+            attempts += 1
+            i = made
             try:
                 kwargs = {
                     "image": image,
@@ -390,9 +397,13 @@ def process_subset(
                     aug_polygons,
                     aug_poly_ids,
                 )
+                made += 1
 
             except Exception as e:
                 print(f"Error processing {base_name}: {e}")
+
+        if made < count_per_image:
+            print(f"[{subset_name}] {base_name}: made {made} of {count_per_image} copies (defect kept getting cropped out)")
 
     print(
         f"[{subset_name}] Label mix: {seg_files} segmentation image(s), "
