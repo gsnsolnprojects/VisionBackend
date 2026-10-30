@@ -7,12 +7,15 @@
 
 FROM node:20-bookworm-slim
 
+# NVIDIA_VISIBLE_DEVICES also tells the training worker it is on the GPU server (Settings -> Usage)
 ENV NODE_ENV=production \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     VIRTUAL_ENV=/opt/venv \
     PATH=/opt/venv/bin:$PATH \
-    YOLO_CONFIG_DIR=/data/.ultralytics
+    YOLO_CONFIG_DIR=/data/.ultralytics \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 python3-venv libgl1 libglib2.0-0 ca-certificates \
