@@ -233,6 +233,13 @@ const trainingJobSchema = new mongoose.Schema({
   },
   cancelledAt: {
     type: Date
+  },
+
+  // Where it trained: 'gpu' (the GPU server) or 'cpu'; set when the worker starts it (usage reports)
+  device: {
+    type: String,
+    enum: ['gpu', 'cpu', null],
+    default: null
   }
 }, {
   timestamps: true // Automatically adds createdAt and updatedAt

@@ -21,6 +21,11 @@ const fsPromises = require('fs').promises;
 const Bull = require('bull');
 const { BlobServiceClient } = require('@azure/storage-blob');
 const os = require('os');
+const GpuServerSession = require('../models/GpuServerSession');
+
+// Docker's --gpus flag sets NVIDIA_VISIBLE_DEVICES: this worker runs on the GPU server
+const ON_GPU_SERVER = !!process.env.NVIDIA_VISIBLE_DEVICES;
+let gpuSessionId = null;
 
 // Same Redis settings as the API's queues: TLS only for Azure Redis (host + password) or REDIS_TLS,
 // so the plain "redis" container on the server works too
@@ -719,6 +724,7 @@ const processTrainingJob = async (job) => {
     // ✅ Update status to 'running' and seed progress/metrics for live status API
     trainingJob.status = 'running';
     trainingJob.startedAt = new Date();
+    trainingJob.device = ON_GPU_SERVER ? 'gpu' : 'cpu';
     trainingJob.progress.totalEpochs = hyperparameters.epochs || 0;
     trainingJob.progress.currentEpoch = 0;
     trainingJob.progress.progressPercent = 0;
@@ -1491,6 +1497,19 @@ const startWorker = async () => {
     
     console.log('✅ Training worker connected to MongoDB');
 
+    // On the GPU server: record this switch-on (from the server's boot time) for usage reports
+    if (ON_GPU_SERVER) {
+      const host = os.hostname();
+      const bootedAt = new Date(Date.now() - os.uptime() * 1000);
+      // A restart of the worker on the same boot reuses that boot's record
+      const session = await GpuServerSession.findOneAndUpdate(
+        { host, startedAt: { $gte: new Date(bootedAt.getTime() - 60000), $lte: new Date(bootedAt.getTime() + 60000) } },
+        { $setOnInsert: { host, startedAt: bootedAt }, $set: { stoppedAt: null } },
+        { upsert: true, new: true }
+      ).catch((e) => console.warn('[GPU-SESSION] could not record:', e.message));
+      gpuSessionId = session?._id || null;
+    }
+
     // ✅ Process jobs from queue (concurrency 1). processTrainingJob now awaits Python,
     // so the next job cannot start until the GPU is free.
     trainingQueue.process(1, async (job) => {
@@ -1527,6 +1546,10 @@ process.on('uncaughtException', (err) => {
 // ✅ Graceful shutdown
 process.on('SIGTERM', async () => {
   console.log('SIGTERM received, shutting down gracefully...');
+  // The GPU server is switching off (or the worker restarting): close its on-time record
+  if (gpuSessionId) {
+    await GpuServerSession.updateOne({ _id: gpuSessionId }, { $set: { stoppedAt: new Date() } }).catch(() => {});
+  }
   await mongoose.connection.close();
   process.exit(0);
 });

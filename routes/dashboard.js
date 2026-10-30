@@ -10,6 +10,7 @@ const {
   deleteProject,
   getLearningProgress,
 } = require('../controllers/dashboardController');
+const { getActivity } = require('../controllers/usageController');
 
 /**
  * Dashboard Routes
@@ -22,6 +23,9 @@ router.get('/overview', authenticateToken, requirePermission('viewProjects'), ge
 
 // GET /api/dashboard/learning-progress - Playground learning path counts for the caller's company
 router.get('/learning-progress', authenticateToken, requirePermission('viewProjects'), getLearningProgress);
+
+// GET /api/dashboard/usage?month=YYYY-MM - who did what and when (trainings with GPU time, tests, uploads)
+router.get('/usage', authenticateToken, requirePermission('viewProjects'), getActivity);
 
 // GET /api/dashboard/activity
 router.get('/activity', authenticateToken, requirePermission('viewProjects'), getDashboardActivity);

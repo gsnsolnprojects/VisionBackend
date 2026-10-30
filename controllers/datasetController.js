@@ -2572,6 +2572,15 @@ const startAugmentation = async (req, res) => {
     dataset.augmentationStatus = 'running';
     await dataset.save();
 
+    // Who asked for the extra photos (Settings -> Usage); keyed by the source dataset
+    await auditService.logAction({
+      action: 'execute',
+      resourceType: 'dataset',
+      resourceId: dataset._id.toString(),
+      details: { company: dataset.company, project: dataset.project },
+      req,
+    });
+
     return res.status(202).json({
       datasetId: dataset._id.toString(),
       message: 'Augmentation started',
