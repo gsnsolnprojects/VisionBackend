@@ -172,6 +172,8 @@ async function relocateNonSplitImagesToTrain(dataset) {
 
   for (const img of images) {
     if (classifySplitFolder(img.folder, img.storedPath)) continue;
+    // Photos waiting for a label aren't a training photo yet: with no label, they'd teach "no defect here"
+    if (img.folder === 'unlabeled' && !img.hasLabels) continue;
 
     const filename = img.filename || path.basename(img.storedPath || '');
     if (!filename) continue;
