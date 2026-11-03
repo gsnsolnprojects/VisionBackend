@@ -625,10 +625,14 @@ const startTraining = async (req, res) => {
     }
 
     // Merge hyperparameters with defaults (use finalModelType which may come from trained model)
-    // Customers often have few photos and small defects: a larger image and more passes find them
+    // Customers choose within limits; their defaults suit few photos and small defects
+    const customerChoice = isGsnUser(req.user) ? null : trainingService.customerHyperparameters(hyperparameters);
+    if (customerChoice?.error) {
+      return res.status(400).json({ error: customerChoice.error, message: customerChoice.error });
+    }
     const mergedHyperparameters = trainingService.mergeHyperparameters(
       finalModelType,
-      isGsnUser(req.user) ? hyperparameters : { imgSize: 640, epochs: 50, ...hyperparameters }
+      customerChoice ? customerChoice.settings : hyperparameters
     );
 
     // Validate hyperparameters
