@@ -3377,7 +3377,8 @@ const addDatasetFiles = async (req, res) => {
     }
 
     const hasSplit = await datasetAlreadyHasSplit(dataset);
-    const folderName = resolveFolderForNewPhotos(req.body.folder || req.body.folderName, hasSplit);
+    // Customers' new photos wait outside the split until labelled: in train with no label they would teach "no defect here"
+    const folderName = isGsnUser(req.user) ? resolveFolderForNewPhotos(req.body.folder || req.body.folderName, hasSplit) : 'unlabeled';
     const validExtensions = ['.jpg', '.jpeg', '.png', '.txt'];
     const datasetRoot = storageAdapter.datasetRoot(dataset);
     const imagesPath = storageAdapter.datasetImagesPath(dataset);

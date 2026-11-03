@@ -1441,6 +1441,16 @@ const convertAnnotationsToYOLO = async (req, res) => {
             }
           }
 
+          // The photo list on the project page reads the file list, so it moves too
+          const listed = (dataset.files || []).find(
+            (f) => f.type === 'image' && f.storedName === path.basename(item.imageDoc.storedPath)
+          );
+          if (listed) {
+            listed.storedName = item.storedName;
+            listed.storedPath = newPath;
+            listed.folder = folder;
+          }
+
           item.imageDoc.storedPath = newPath;
           item.imageDoc.folder = folder;
           await item.imageDoc.save();
