@@ -474,6 +474,8 @@ def train_yolo(config):
             'batch': batch,
             'imgsz': imgsz,
             'lr0': lr0,
+            # 'auto' picks its own optimizer and learning rate, ignoring lr0
+            'optimizer': config.get('optimizer', 'auto'),
             'workers': workers,
             'project': project,
             'name': name,

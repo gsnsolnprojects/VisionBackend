@@ -171,7 +171,7 @@ function computeProgressPercentWithBatch(epochIndex, totalEpochs, currentStep, t
 }
 
 /** What a customer's training runs with unless they choose otherwise */
-const CUSTOMER_DEFAULTS = { epochs: 50, batchSize: 8, imgSize: 640, learningRate: 0.01 };
+const CUSTOMER_DEFAULTS = { epochs: 50, batchSize: 8, imgSize: 640, learningRate: 0.002 };
 
 /**
  * A customer's training settings: their choices within limits that fit the training computer
@@ -188,8 +188,8 @@ function customerHyperparameters(chosen = {}) {
   if (!Number.isInteger(epochs) || epochs < 1 || epochs > 200) return { error: 'Epochs must be a whole number from 1 to 200.' };
   if (![4, 8, 16, 32].includes(batchSize)) return { error: 'Batch size must be 4, 8, 16 or 32.' };
   if (![320, 416, 512, 640, 800, 960, 1280].includes(imgSize)) return { error: 'Image size must be 320, 416, 512, 640, 800, 960 or 1280.' };
-  if (typeof learningRate !== 'number' || !(learningRate >= 0.0001 && learningRate <= 0.1)) {
-    return { error: 'Learning rate must be from 0.0001 to 0.1.' };
+  if (typeof learningRate !== 'number' || !(learningRate >= 0.0001 && learningRate <= 0.01)) {
+    return { error: 'Learning rate must be from 0.0001 to 0.01.' };
   }
   if (batchSize * (imgSize / 640) ** 2 > 32) return { error: 'That batch size needs too much memory at this image size. Choose a smaller one.' };
   return { settings };

@@ -401,7 +401,8 @@ async function generateTrainingConfig(
   modelSize = 'n',
   modelPath = null,
   modelKey = null,
-  augmentationPreset = 'none'
+  augmentationPreset = 'none',
+  optimizer = 'auto'
 ) {
   const dataYamlPath = path.join(datasetPath, 'data.yaml');
   
@@ -450,6 +451,7 @@ names: []
     batch: hyperparameters.batchSize,
     imgsz: hyperparameters.imgSize,
     lr0: hyperparameters.learningRate,
+    optimizer,
     workers: hyperparameters.workers,
     data: dataYamlPath,
     project: path.join(path.dirname(outputPath), 'runs'),
@@ -867,7 +869,9 @@ const processTrainingJob = async (job) => {
         modelSize,
         modelPath,
         modelKey,
-        augmentationPreset
+        augmentationPreset,
+        // Customers choose a learning rate, which 'auto' would ignore
+        String(trainingJob.company || '').trim().toLowerCase() === 'gsn' ? 'auto' : 'AdamW'
       );
     }
 
