@@ -792,6 +792,12 @@ const getTrainingStatus = async (req, res) => {
       model: null // ✅ Will be populated if model is registered
     };
 
+    // The server that starts the GPU writes this file while AWS has no GPU computer to give it
+    if (trainingJob.status === 'queued') {
+      const noGpuSince = await fs.promises.stat(path.join(process.cwd(), '.gpu-no-capacity')).catch(() => null);
+      response.noGpuAvailable = !!noGpuSince && Date.now() - noGpuSince.mtimeMs < 5 * 60 * 1000;
+    }
+
     // ✅ If training is completed, check if model was registered
     if (trainingJob.status === 'completed') {
       const registeredModel = await Model.findOne({ jobId: trainingJob._id })
