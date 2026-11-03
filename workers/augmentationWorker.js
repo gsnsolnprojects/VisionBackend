@@ -15,7 +15,7 @@ const Dataset = require('../models/Dataset');
 const Image = require('../models/Image');
 const Category = require('../models/Category');
 const storageAdapter = require('../services/storageAdapter');
-const { splitDatasetByGroup } = require('../utils/splitDataset');
+const { splitDatasetByGroup, splitShares } = require('../utils/splitDataset');
 const { getLabelFilePath } = require('../utils/yoloConverter');
 
 /**
@@ -267,9 +267,9 @@ const processAugmentationJob = async (job) => {
     targetSize,
     augmentationMultiplier,
     imageIds,
-    // Playground: only the originals are split, and copies are made of training photos only, so
-    // validation and held-out photos stay real (scores stay honest)
-    copiesForTrainingOnly = false,
+    // Playground: only the originals are split, and every copy goes into the same set as the photo
+    // it was made from, so the model is never tested on a photo it learned from (scores stay honest)
+    copiesStayWithPhoto = false,
   } = job.data || {};
 
   console.log('[AUGMENT-WORKER] Processing augmentation job', {
@@ -485,13 +485,14 @@ const processAugmentationJob = async (job) => {
     };
     const groupOf = (item) => item.group;
     let originalsSplit = null;
-    let poolForCopies = scopedPool;
-    if (copiesForTrainingOnly) {
+    const splitOfPhoto = new Map();
+    if (copiesStayWithPhoto) {
       const originals = [...passthroughPool, ...scopedPool];
       await readGroups(originals);
       originalsSplit = splitDatasetByGroup(originals, originalDataset, groupOf);
-      const trainNames = new Set(originalsSplit.train.map((p) => p.storedName.toLowerCase()));
-      poolForCopies = scopedPool.filter((p) => trainNames.has(p.storedName.toLowerCase()));
+      for (const set of ['train', 'val', 'test']) {
+        for (const item of originalsSplit[set]) splitOfPhoto.set(path.parse(item.storedName).name.toLowerCase(), set);
+      }
     }
 
     // ---------- 2. Temp dirs: input pool (scoped images) and output pool (Python writes augmented here) ----------
@@ -502,7 +503,7 @@ const processAugmentationJob = async (job) => {
     await storageAdapter.ensureDir(poolImagesDir);
     await storageAdapter.ensureDir(poolLabelsDir);
 
-    for (const item of poolForCopies) {
+    for (const item of scopedPool) {
       const destImage = path.join(poolImagesDir, item.storedName);
       const destLabel = path.join(poolLabelsDir, path.parse(item.storedName).name + '.txt');
       if (path.resolve(item.sourcePath) !== path.resolve(destImage)) {
@@ -535,8 +536,35 @@ const processAugmentationJob = async (job) => {
     // Python generates additional variants; aim so originals + augs ≈ desiredTotal
     const additionalNeeded = Math.max(0, desiredTotal - scopedPool.length);
     // Ask Python for at least `additionalNeeded` variants (it creates ceil(target/n)*n files)
-    const effectiveTargetTrainTotal =
-      additionalNeeded > 0 ? Math.max(additionalNeeded, poolForCopies.length) : poolForCopies.length;
+    let effectiveTargetTrainTotal =
+      additionalNeeded > 0 ? Math.max(additionalNeeded, scopedPool.length) : scopedPool.length;
+
+    // Copies each set still needs for the whole version to reach the normal train/val/test shares,
+    // and so how many per photo Python must make (the set with the fewest photos per copy decides)
+    let copiesWanted = null;
+    if (originalsSplit && additionalNeeded > 0) {
+      const total = desiredTotal + passthroughPool.length;
+      const shares = splitShares(originalDataset);
+      const val = Math.round(total * shares.val);
+      const test = Math.round(total * shares.test);
+      const wanted = { train: total - val - test, val, test };
+      const scopedNames = new Set(scopedPool.map((p) => p.storedName.toLowerCase()));
+      copiesWanted = {};
+      let perPhoto = 1;
+      for (const set of ['val', 'test', 'train']) {
+        const photos = originalsSplit[set].filter((p) => scopedNames.has(p.storedName.toLowerCase())).length;
+        const needed = Math.max(0, wanted[set] - originalsSplit[set].length);
+        // A set with no photos to copy leaves its share to train
+        if (!photos && set !== 'train') {
+          wanted.train += needed;
+          copiesWanted[set] = 0;
+          continue;
+        }
+        copiesWanted[set] = needed;
+        if (photos) perPhoto = Math.max(perPhoto, Math.ceil(needed / photos));
+      }
+      effectiveTargetTrainTotal = perPhoto * scopedPool.length;
+    }
 
     const effectiveValTestMultiplier =
       typeof valTestMultiplier === 'number' && valTestMultiplier > 0 ? valTestMultiplier : 2;
@@ -548,7 +576,7 @@ const processAugmentationJob = async (job) => {
     }
 
     // Skip Python when user asked for the same count as current (no extra images needed)
-    if (additionalNeeded > 0 && poolForCopies.length > 0) {
+    if (additionalNeeded > 0) {
       const result = await runPythonAugmentation({
         inputRoot: inputPoolRoot,
         outputRoot: outputPoolRoot,
@@ -598,7 +626,21 @@ const processAugmentationJob = async (job) => {
         return m ? parseInt(m[1], 10) : 0;
       };
       augEntries.sort((a, b) => copyIndex(a.name) - copyIndex(b.name) || a.name.localeCompare(b.name));
-      for (const entry of augEntries) {
+      const copySet = (name) => splitOfPhoto.get(path.parse(name).name.replace(/_aug_\d+$/, '').toLowerCase()) || 'train';
+      // Python makes more than needed: take what each set wants first; if a photo's copies fell short, the rest fill up
+      const inOrder = copiesWanted
+        ? [
+            ...augEntries.filter((entry) => {
+              const set = copySet(entry.name);
+              if (copiesWanted[set] <= 0) return false;
+              copiesWanted[set] -= 1;
+              entry.wanted = true;
+              return true;
+            }),
+            ...augEntries.filter((entry) => !entry.wanted),
+          ]
+        : augEntries;
+      for (const entry of inOrder) {
         if (scopedCount >= desiredTotal) break;
         if (!entry.isFile()) continue;
         const storedName = entry.name;
@@ -616,6 +658,7 @@ const processAugmentationJob = async (job) => {
           storedPath,
           sourcePath: path.join(outputPoolRoot, storedPath),
           labelPath: fullLabelPath,
+          set: copySet(storedName),
         });
         scopedCount += 1;
       }
@@ -627,8 +670,11 @@ const processAugmentationJob = async (job) => {
     await readGroups(combinedList);
     let { train: trainList, val: valList, test: testList } = originalsSplit
       ?? splitDatasetByGroup(combinedList, originalDataset, groupOf);
-    if (copiesForTrainingOnly) {
-      trainList = [...trainList, ...combinedList.slice(originalsCount)];
+    if (originalsSplit) {
+      const copies = combinedList.slice(originalsCount);
+      trainList = [...trainList, ...copies.filter((c) => c.set === 'train')];
+      valList = [...valList, ...copies.filter((c) => c.set === 'val')];
+      testList = [...testList, ...copies.filter((c) => c.set === 'test')];
     }
 
     // ✅ Hard guarantee: no filename in more than one split (defensive; splitDataset is already disjoint by item)

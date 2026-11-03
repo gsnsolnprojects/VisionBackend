@@ -2532,8 +2532,7 @@ const startAugmentation = async (req, res) => {
         : null;
 
     // Customers (Playground): their own labelled dataset only, up to CUSTOMER_AUGMENT_MAX photos in
-    // all, extra copies for training only (held-out photos stay real), one augmented version per
-    // dataset (a new one replaces it)
+    // all, each copy in the same set as its photo, one augmented version per dataset (a new one replaces it)
     if (!isGsnUser(req.user)) {
       if (dataset.isAugmented) {
         return res.status(400).json({ error: 'Make more photos from the original dataset, not from an augmented one.' });
@@ -2544,16 +2543,14 @@ const startAugmentation = async (req, res) => {
           error: `Label at least ${CUSTOMER_MIN_LABELLED} photos first (${labelled} so far).`,
         });
       }
-      // The target is the labelled photos in all after augmenting (the worker copies labelled photos only).
-      // Extra photos are files on disk, so the dataset's own photos plus them stay within the plan's
-      // photos per dataset; a sample you label yourself holds links to GSN's photos, which don't count.
+      // The target is the photos in the new version in all: the labelled photos plus their copies.
+      // The new version is a dataset of its own, so it gets the plan's whole photos per dataset.
       const perDataset = req.user.access?.limits?.imagesPerDataset ?? CUSTOMER_AUGMENT_MAX;
-      const used = dataset.labelledSampleOf ? 0 : dataset.totalImages || 0;
-      const room = Math.min(CUSTOMER_AUGMENT_MAX, perDataset - used);
+      const room = Math.min(CUSTOMER_AUGMENT_MAX, perDataset);
       targetTrainTotal = Math.min(targetTrainTotal || room, room);
       if (targetTrainTotal <= labelled) {
         return res.status(400).json({
-          error: `No room for extra photos: this dataset uses ${used} of your ${perDataset} photos, and extra photos count towards them.`,
+          error: `You already have ${labelled} labelled photos, and a set can hold ${room}.`,
         });
       }
       valTestMultiplier = 1;
@@ -2588,7 +2585,7 @@ const startAugmentation = async (req, res) => {
       valTestMultiplier,
       augmentationMultiplier,
       imageIds,
-      copiesForTrainingOnly: !isGsnUser(req.user),
+      copiesStayWithPhoto: !isGsnUser(req.user),
     };
 
     const job = await augmentationQueue.add(jobPayload, {

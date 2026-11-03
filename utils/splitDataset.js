@@ -76,6 +76,18 @@ function getSplitConfig(config) {
 }
 
 /**
+ * The train/val/test shares of a config, adding up to at most 1 (the defaults add up to 1.1).
+ * @param {Object} [config] - Optional config (e.g. from Dataset or null)
+ * @returns {{ train: number, val: number, test: number }}
+ */
+function splitShares(config) {
+  const cfg = getSplitConfig(config);
+  const sum = cfg.split_ratio_train + cfg.split_ratio_val + cfg.test_sample_ratio;
+  const scale = sum > 1 ? sum : 1;
+  return { train: cfg.split_ratio_train / scale, val: cfg.split_ratio_val / scale, test: cfg.test_sample_ratio / scale };
+}
+
+/**
  * Split an image list into disjoint train, val, and test sets using seeded shuffle.
  *
  * When train + val + test ratios sum to more than 1 (default 0.8+0.2+0.1), ratios are
@@ -95,17 +107,8 @@ function splitDataset(imageList, config) {
   const shuffled = seededShuffle(imageList, cfg.split_seed);
   const n = shuffled.length;
 
-  let trainRatio = cfg.split_ratio_train;
-  let valRatio = cfg.split_ratio_val;
-  let testRatio = cfg.test_sample_ratio;
-
   // ✅ Keep partitions disjoint when defaults sum to > 1
-  const sum = trainRatio + valRatio + testRatio;
-  if (sum > 1 && sum > 0) {
-    trainRatio /= sum;
-    valRatio /= sum;
-    testRatio /= sum;
-  }
+  const { train: trainRatio, val: valRatio } = splitShares(config);
 
   // ✅ Tiny datasets: YOLO needs train+val. Keep everything in train; train.py
   // falls back to val=train when val is empty (n === 1).
@@ -184,6 +187,7 @@ function splitDatasetByGroup(imageList, config, groupOf) {
 module.exports = {
   DEFAULT_SPLIT_CONFIG,
   getSplitConfig,
+  splitShares,
   splitDataset,
   splitDatasetByGroup,
   createSeededRng,
