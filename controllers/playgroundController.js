@@ -15,6 +15,7 @@ const { SAMPLE_COMPANY } = require('../services/sampleLibraryService');
 const { canAccessAllWorkspaces } = require('../utils/workspaceScoping');
 const { markPracticeDone } = require('../services/playgroundProgressService');
 const { listLevels, startLevel, saveProgress } = require('../services/playgroundLevelService');
+const { sampleRunKey, copySavedRun } = require('../services/sampleRunService');
 const {
   closeRun,
   writeReport,
@@ -299,6 +300,40 @@ const startSampleRun = async (req, res, { purpose, project, tooMany, fileName })
 
     const inferenceId = `inf_${Date.now()}_${uuidv4().substring(0, 8)}`;
     const folder = path.join(process.cwd(), 'uploads', 'inference-temp', `practice_${inferenceId}`);
+
+    // Another student's finished run of the same model on the same photos: the same results, at once
+    const key = sampleRunKey({
+      purpose,
+      datasetId: String(dataset._id),
+      modelId: String(model._id),
+      confidence: PRACTICE_CONFIDENCE,
+      fileIds: files.map((f) => String(f._id)),
+    });
+    const saved = await copySavedRun(key, folder).catch((err) => {
+      console.warn(`[playground] saved run not used: ${err.message}`);
+      return null;
+    });
+    if (saved) {
+      const job = await InferenceJob.create({
+        inferenceId,
+        modelId: model._id,
+        company,
+        project,
+        sourceType: 'custom_folder',
+        customFolderPath: folder,
+        status: 'completed',
+        completedAt: new Date(),
+        createdBy: req.user?.id || null,
+        excludeFromHistory: true,
+        purpose,
+        autoCloseAt: new Date(Date.now() + PRACTICE_LIFETIME_MS),
+        progress: { totalImages: files.length, processedImages: files.length, progressPercent: 100 },
+        results: saved.results,
+      });
+      return res.status(202).json({ inferenceId: job.inferenceId, totalImages: files.length });
+    }
+
+    await fs.promises.rm(folder, { recursive: true, force: true });
     await storageAdapter.ensureDir(folder);
     for (const file of files) {
       const ext = path.extname(file.storedName) || '.jpg';
@@ -316,6 +351,7 @@ const startSampleRun = async (req, res, { purpose, project, tooMany, fileName })
       createdBy: req.user?.id || null,
       excludeFromHistory: true,
       purpose,
+      sampleRunKey: key,
       autoCloseAt: new Date(Date.now() + PRACTICE_LIFETIME_MS),
       progress: { totalImages: files.length, processedImages: 0, progressPercent: 0 },
     });

@@ -168,6 +168,13 @@ const inferenceJobSchema = new mongoose.Schema({
     default: null
   },
 
+  // A run of GSN's model on a sample's photos: finished, its results are saved under this key
+  // for later students (services/sampleRunService.js)
+  sampleRunKey: {
+    type: String,
+    default: null
+  },
+
   // Reference to dataset (only for test_folder sourceType)
   datasetId: {
     type: mongoose.Schema.Types.ObjectId,

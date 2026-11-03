@@ -16,6 +16,7 @@ const InferenceJob = require('../models/InferenceJob');
 const Model = require('../models/Model');
 const Dataset = require('../models/Dataset');
 const storageAdapter = require('../services/storageAdapter');
+const { saveSampleRun } = require('../services/sampleRunService');
 const { getClassNamesForTrainedModel } = require('../services/yoloClassNamesService');
 
 /**
@@ -627,6 +628,13 @@ const processInferenceJob = async (job) => {
 
           await saveInferenceJob();
           console.log(`✅ Inference job ${inferenceId} results saved`);
+
+          // A run on a GSN sample's photos is kept for later students; the run itself is already done
+          try {
+            await saveSampleRun(await InferenceJob.findOne({ inferenceId }).lean());
+          } catch (saveError) {
+            console.warn(`⚠️ Could not keep sample run ${inferenceId}: ${saveError.message}`);
+          }
 
           // ✅ Clean up custom folder after successful inference
           if (sourceType === 'custom_folder' && customFolderPath && fs.existsSync(customFolderPath)) {
