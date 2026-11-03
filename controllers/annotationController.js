@@ -1461,6 +1461,25 @@ const convertAnnotationsToYOLO = async (req, res) => {
       await copyAndUpdate(valList, 'val', imagesValPath, labelsValPath);
       await copyAndUpdate(testList, 'test', imagesTestPath, labelsTestPath);
 
+      // A customer's photos left unlabelled wait outside the split: in train they'd teach "no defect here"
+      if (!isGsnUser(req.user)) {
+        const waiting = await Image.find({ datasetId, hasLabels: { $ne: true }, folder: { $in: ['train', 'val', 'test'] } });
+        await storageAdapter.ensureDir(path.join(datasetPath, 'images', 'unlabeled'));
+        for (const img of waiting) {
+          const name = path.basename(img.storedPath);
+          const newPath = `images/unlabeled/${name}`;
+          await fs.rename(path.join(datasetPath, img.storedPath), path.join(datasetPath, newPath)).catch(() => undefined);
+          const listed = (dataset.files || []).find((f) => f.type === 'image' && f.storedName === name);
+          if (listed) {
+            listed.storedPath = newPath;
+            listed.folder = 'unlabeled';
+          }
+          img.storedPath = newPath;
+          img.folder = 'unlabeled';
+          await img.save();
+        }
+      }
+
       dataset.trainCount = trainList.length;
       dataset.valCount = valList.length;
       dataset.testCount = testList.length;

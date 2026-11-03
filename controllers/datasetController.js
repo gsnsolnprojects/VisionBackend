@@ -19,10 +19,12 @@ const { buildWorkspaceFilter, validateWorkspaceAccess, canAccessAllWorkspaces } 
 const {
   isGsnUser,
   countLabelledPhotos,
+  countPendingTrainings,
   CUSTOMER_MIN_LABELLED,
   CUSTOMER_AUGMENT_MAX,
 } = require('../middleware/customerAccessMiddleware');
 const { sanitizeString } = require('../middleware/xssSanitizer');
+const PlaygroundLevelProgress = require('../models/PlaygroundLevelProgress');
 
 /** Map an Image row to train / val / test using folder name or storedPath. */
 function classifySplitFolder(folder, storedPath) {
@@ -1652,6 +1654,20 @@ const deleteDataset = async (req, res) => {
       }
     }
 
+    // Customers: not under a running training, and extra photos made from this dataset go with it
+    const customer = !isGsnUser(req.user);
+    if (customer && (await countPendingTrainings(dataset.company)) > 0) {
+      const message = 'A training is running. Delete this dataset when it finishes.';
+      return res.status(409).json({ error: message, message });
+    }
+    const extras = customer && !dataset.isAugmented
+      ? await Dataset.find({ parentDatasetId: dataset._id, isAugmented: true, deletedAt: null })
+      : [];
+    if (extras.some((d) => d.status === 'processing' || d.augmentationStatus === 'running')) {
+      const message = 'More photos are being made from this dataset. Delete it when that finishes.';
+      return res.status(400).json({ error: message, message });
+    }
+
     // ✅ Log deletion attempt
     console.log(`[DELETE] Attempting to delete dataset:`, {
       datasetId: dataset._id.toString(),
@@ -1702,7 +1718,7 @@ const deleteDataset = async (req, res) => {
       console.error(`[DELETE] Failed to delete dataset files: ${deleteResult.error}`, { dirPath: dirPathToDelete });
       return res.status(500).json({
         error: 'Failed to delete dataset files',
-        message: deleteResult.error || 'Storage deletion failed. Dataset was not deleted.'
+        message: 'The photos could not be deleted. Please try again in a minute.'
       });
     }
     console.log(`🗑️ [DELETE] Deleted dataset files: ${dirPathToDelete}`);
@@ -1726,6 +1742,27 @@ const deleteDataset = async (req, res) => {
       version: dataset.version,
       deletedAt: dataset.deletedAt
     });
+
+    for (const extra of extras) {
+      await deleteDatasetFiles(extra);
+      await Annotation.deleteMany({ datasetId: extra._id });
+      await Category.deleteMany({ datasetId: extra._id });
+      await Image.deleteMany({ datasetId: extra._id });
+      extra.deletedAt = new Date();
+      extra.status = 'failed';
+      extra.isActive = false;
+      await extra.save();
+    }
+
+    // The Level 2 built on these photos: without its photos it starts over; without the extra ones, only that step
+    if (customer) {
+      await PlaygroundLevelProgress.updateMany(
+        { company: dataset.company, level: 2, mission: dataset.project },
+        dataset.isAugmented
+          ? { $pull: { completedSteps: 'augment' } }
+          : { $set: { completedSteps: [], trainingJobId: null, finishedAt: null } }
+      );
+    }
 
     // ✅ Return success response
     res.json({
@@ -3573,6 +3610,11 @@ const deleteDatasetFile = async (req, res) => {
       return res.status(404).json({ error: 'Not Found', message: 'File not found in this dataset' });
     }
 
+    if (!isGsnUser(req.user) && (await countPendingTrainings(dataset.company)) > 0) {
+      const message = 'A training is running. Delete photos when it finishes.';
+      return res.status(409).json({ error: message, message });
+    }
+
     const datasetPath = storageAdapter.datasetRoot(dataset);
     const toRemove = [file];
 
@@ -3599,6 +3641,19 @@ const deleteDatasetFile = async (req, res) => {
         await removeLocalFileIfExists(thumbPath);
       }
       removedNames.push(entry.originalName || entry.storedName);
+    }
+
+    // Labels written from boxes aren't on the file list, and a split photo may have moved since it was listed
+    if (file.type === 'image') {
+      const indexed = await Image.findOne({
+        datasetId: dataset._id,
+        $or: [{ storedPath: file.storedPath }, { filename: file.storedName }],
+      }).select('storedPath').lean();
+      const actualPath = indexed?.storedPath || file.storedPath;
+      await removeLocalFileIfExists(path.join(datasetPath, actualPath));
+      await removeLocalFileIfExists(path.join(datasetPath, getLabelFilePath(actualPath)));
+      // The upload also leaves a copy here when it splits the photos
+      await removeLocalFileIfExists(path.join(datasetPath, 'images', 'unlabeled', path.basename(actualPath)));
     }
 
     const removeIds = new Set(toRemove.map((e) => (e._id ? e._id.toString() : e.storedName)));
