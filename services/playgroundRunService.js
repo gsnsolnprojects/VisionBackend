@@ -170,7 +170,7 @@ async function writeReport(job, info) {
     } catch {
       doc.rect(x, rowTop, colW, imgH).fill('#e2ddfb');
     }
-    doc.font('Helvetica').fontSize(8).fillColor(muted).text(p.originalName, x, rowTop + imgH + 5, { width: colW, height: 10, ellipsis: true });
+    doc.font('Helvetica').fontSize(8).fillColor(muted).text(shownName(info, p), x, rowTop + imgH + 5, { width: colW, height: 10, ellipsis: true });
     doc.fillColor(ink).font('Helvetica-Bold').fontSize(8.5).text('Model found: ', x, rowTop + imgH + 18, { continued: true, width: colW });
     doc.font('Helvetica').text(p.found.length ? p.found.join(', ') : 'nothing', { width: colW, height: 11, ellipsis: true });
     const labelled = info.labelled?.[p.originalName] || info.labelled?.[p.file];
@@ -193,6 +193,12 @@ async function writeReport(job, info) {
   return { filePath, csvPath, previewPath, sizeBytes: size, photos: photos.length };
 }
 
+/** The student's own file name when the page sent it (held-out photos are stored under another name) */
+const shownName = (info, p) => {
+  const name = info.names?.[p.originalName] || info.names?.[p.file];
+  return typeof name === 'string' ? name.slice(0, 200) : p.originalName;
+};
+
 const csvCell = (v) => {
   const text = v === null || v === undefined ? '' : String(v);
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
@@ -204,7 +210,7 @@ async function writeReportCsv(info, photos, csvPath) {
   for (const p of photos) {
     const labelled = info.labelled?.[p.originalName] || info.labelled?.[p.file];
     rows.push([
-      p.originalName,
+      shownName(info, p),
       p.found.length ? p.found.join('; ') : 'nothing',
       p.classes.reduce((sum, c) => sum + c.count, 0),
       p.classes

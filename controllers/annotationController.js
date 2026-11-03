@@ -19,6 +19,7 @@ const {
   bboxToPolygon
 } = require('../utils/yoloConverter');
 const { splitDataset } = require('../utils/splitDataset');
+const { isGsnUser, countPendingTrainings } = require('../middleware/customerAccessMiddleware');
 
 /**
  * Annotation Controller
@@ -692,9 +693,6 @@ const updateAnnotation = async (req, res) => {
         return sendValidationError(res, 'bbox', bboxValidation.error);
       }
       annotation.bbox = bbox;
-      if (!annotation.polygon || annotation.polygon.length < 3) {
-        annotation.polygon = bboxToPolygon(bbox);
-      }
     }
 
     if (polygon !== undefined) {
@@ -1234,7 +1232,8 @@ const convertAnnotationsToYOLO = async (req, res) => {
     const { imageIds, createEmptyLabels = false, modelType = 'YOLO', unannotatedImageIds } = req.body; // Optional: if provided, convert only those images. createEmptyLabels: create empty .txt for unannotated images
     // Photos the user confirmed as good ("the images without annotations are good images? Yes")
     const goodImageIds = new Set((Array.isArray(unannotatedImageIds) ? unannotatedImageIds : []).map(String));
-    const exportMode = modelType === 'YOLO_SEG' ? 'segment' : 'detect';
+    // Customers train detection models only, so their labels are always boxes
+    const exportMode = modelType === 'YOLO_SEG' && isGsnUser(req.user) ? 'segment' : 'detect';
 
     // Validate datasetId
     if (!mongoose.Types.ObjectId.isValid(datasetId)) {
@@ -1245,6 +1244,11 @@ const convertAnnotationsToYOLO = async (req, res) => {
     const dataset = await Dataset.findById(datasetId);
     if (!dataset) {
       return sendNotFoundError(res, 'Dataset', datasetId);
+    }
+
+    // This moves photos between train/val/test, so not under a customer's training that reads them
+    if (!isGsnUser(req.user) && (await countPendingTrainings(dataset.company)) > 0) {
+      return sendError(res, 409, 'Training running', 'A training is running. Save again when it finishes.');
     }
 
     // Get ordered categories (for class_id mapping)

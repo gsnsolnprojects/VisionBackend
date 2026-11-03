@@ -4,7 +4,7 @@ const Model = require('../models/Model');
 const { trainingQueue } = require('../queue');
 const trainingService = require('../services/trainingService');
 const auditService = require('../services/auditService');
-const { checkCustomerTraining } = require('../middleware/customerAccessMiddleware');
+const { checkCustomerTraining, isGsnUser } = require('../middleware/customerAccessMiddleware');
 const { buildWorkspaceFilter, validateWorkspaceAccess, canAccessAllWorkspaces } = require('../utils/workspaceScoping');
 const fs = require('fs');
 const path = require('path');
@@ -625,7 +625,11 @@ const startTraining = async (req, res) => {
     }
 
     // Merge hyperparameters with defaults (use finalModelType which may come from trained model)
-    const mergedHyperparameters = trainingService.mergeHyperparameters(finalModelType, hyperparameters);
+    // Customers often have few photos and small defects: a larger image and more passes find them
+    const mergedHyperparameters = trainingService.mergeHyperparameters(
+      finalModelType,
+      isGsnUser(req.user) ? hyperparameters : { imgSize: 640, epochs: 50, ...hyperparameters }
+    );
 
     // Validate hyperparameters
     const hyperValidation = trainingService.validateHyperparameters(mergedHyperparameters);

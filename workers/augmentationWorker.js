@@ -267,8 +267,8 @@ const processAugmentationJob = async (job) => {
     targetSize,
     augmentationMultiplier,
     imageIds,
-    // Playground: only the originals are split, and every new copy goes into the same split as
-    // the photo it was made from, so no copy of a held-out photo is trained on (scores stay honest)
+    // Playground: only the originals are split, and copies are made of training photos only, so
+    // validation and held-out photos stay real (scores stay honest)
     copiesForTrainingOnly = false,
   } = job.data || {};
 
@@ -472,6 +472,28 @@ const processAugmentationJob = async (job) => {
       });
     }
 
+    // Photos with a defect and good photos (empty label file) are split separately, so both
+    // show up in train, val and test
+    const readGroups = async (items) => {
+      for (const item of items) {
+        let content = '';
+        try {
+          content = await fs.readFile(item.labelPath, 'utf8');
+        } catch {}
+        item.group = content.trim() ? 'defect' : 'good';
+      }
+    };
+    const groupOf = (item) => item.group;
+    let originalsSplit = null;
+    let poolForCopies = scopedPool;
+    if (copiesForTrainingOnly) {
+      const originals = [...passthroughPool, ...scopedPool];
+      await readGroups(originals);
+      originalsSplit = splitDatasetByGroup(originals, originalDataset, groupOf);
+      const trainNames = new Set(originalsSplit.train.map((p) => p.storedName.toLowerCase()));
+      poolForCopies = scopedPool.filter((p) => trainNames.has(p.storedName.toLowerCase()));
+    }
+
     // ---------- 2. Temp dirs: input pool (scoped images) and output pool (Python writes augmented here) ----------
     const inputPoolRoot = path.join(outputRoot, '_input_pool');
     const outputPoolRoot = path.join(outputRoot, '_output_pool');
@@ -480,7 +502,7 @@ const processAugmentationJob = async (job) => {
     await storageAdapter.ensureDir(poolImagesDir);
     await storageAdapter.ensureDir(poolLabelsDir);
 
-    for (const item of scopedPool) {
+    for (const item of poolForCopies) {
       const destImage = path.join(poolImagesDir, item.storedName);
       const destLabel = path.join(poolLabelsDir, path.parse(item.storedName).name + '.txt');
       if (path.resolve(item.sourcePath) !== path.resolve(destImage)) {
@@ -514,7 +536,7 @@ const processAugmentationJob = async (job) => {
     const additionalNeeded = Math.max(0, desiredTotal - scopedPool.length);
     // Ask Python for at least `additionalNeeded` variants (it creates ceil(target/n)*n files)
     const effectiveTargetTrainTotal =
-      additionalNeeded > 0 ? Math.max(additionalNeeded, scopedPool.length) : scopedPool.length;
+      additionalNeeded > 0 ? Math.max(additionalNeeded, poolForCopies.length) : poolForCopies.length;
 
     const effectiveValTestMultiplier =
       typeof valTestMultiplier === 'number' && valTestMultiplier > 0 ? valTestMultiplier : 2;
@@ -526,7 +548,7 @@ const processAugmentationJob = async (job) => {
     }
 
     // Skip Python when user asked for the same count as current (no extra images needed)
-    if (additionalNeeded > 0) {
+    if (additionalNeeded > 0 && poolForCopies.length > 0) {
       const result = await runPythonAugmentation({
         inputRoot: inputPoolRoot,
         outputRoot: outputPoolRoot,
@@ -602,33 +624,11 @@ const processAugmentationJob = async (job) => {
     }
 
     // ---------- 5. Canonical split once (same seed/ratios as preprocessing and post-annotation) ----------
-    // Photos with a defect and good photos (empty label file) are split separately, so both
-    // show up in train, val and test
-    for (const item of combinedList) {
-      let content = '';
-      try {
-        content = await fs.readFile(item.labelPath, 'utf8');
-      } catch {}
-      item.group = content.trim() ? 'defect' : 'good';
-    }
-    const groupOf = (item) => item.group;
-    let { train: trainList, val: valList, test: testList } = copiesForTrainingOnly
-      ? splitDatasetByGroup(combinedList.slice(0, originalsCount), originalDataset, groupOf)
-      : splitDatasetByGroup(combinedList, originalDataset, groupOf);
+    await readGroups(combinedList);
+    let { train: trainList, val: valList, test: testList } = originalsSplit
+      ?? splitDatasetByGroup(combinedList, originalDataset, groupOf);
     if (copiesForTrainingOnly) {
-      // Each copy goes where its photo went ("board1_aug_3.jpg" is a copy of "board1.jpg")
-      const splitOfPhoto = new Map();
-      for (const [list, name] of [[trainList, 'train'], [valList, 'val'], [testList, 'test']]) {
-        for (const item of list) splitOfPhoto.set(path.parse(item.storedName).name.toLowerCase(), name);
-      }
-      const copiesBySplit = { train: [], val: [], test: [] };
-      for (const copy of combinedList.slice(originalsCount)) {
-        const photo = path.parse(copy.storedName).name.replace(/_aug_\d+$/, '').toLowerCase();
-        copiesBySplit[splitOfPhoto.get(photo) || 'train'].push(copy);
-      }
-      trainList = [...trainList, ...copiesBySplit.train];
-      valList = [...valList, ...copiesBySplit.val];
-      testList = [...testList, ...copiesBySplit.test];
+      trainList = [...trainList, ...combinedList.slice(originalsCount)];
     }
 
     // ✅ Hard guarantee: no filename in more than one split (defensive; splitDataset is already disjoint by item)
@@ -773,6 +773,20 @@ const processAugmentationJob = async (job) => {
     let testCount = 0;
     const filesManifest = [];
     const countedImageNames = new Set();
+    // The name the student knows a photo by; a copy of "board1.jpg" reads "board1_copy3.jpg"
+    const uploadedNames = new Map(
+      (originalDataset.files || [])
+        .filter((f) => f.type === 'image' && f.storedName)
+        .map((f) => [f.storedName.toLowerCase(), f.originalName || f.storedName]),
+    );
+    const shownName = (storedName) => {
+      const direct = uploadedNames.get(storedName.toLowerCase());
+      if (direct) return direct;
+      const { name, ext } = path.parse(storedName);
+      const copy = name.match(/^(.*)_aug_(\d+)$/);
+      const source = copy && [...uploadedNames.entries()].find(([key]) => path.parse(key).name === copy[1].toLowerCase());
+      return source ? `${path.parse(source[1]).name}_copy${copy[2]}${ext}` : storedName;
+    };
 
     for (const split of ['train', 'val', 'test']) {
       const splitImagesDir = path.join(imagesRoot, split);
@@ -804,7 +818,7 @@ const processAugmentationJob = async (job) => {
 
           filesManifest.push({
             storedName,
-            originalName: storedName,
+            originalName: shownName(storedName),
             type: 'image',
             size: stat.size,
             folder: split,

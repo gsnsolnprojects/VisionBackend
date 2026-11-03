@@ -87,7 +87,7 @@ const createReport = async (req, res) => {
       return res.status(409).json({ error: 'Test not finished', message: 'Wait for the test to finish first.' });
     }
 
-    const { projectId, title, industry, labelled } = req.body || {};
+    const { projectId, title, industry, labelled, names } = req.body || {};
     const model = job.modelId ? await Model.findById(job.modelId).select('modelVersion').lean() : null;
     const reportTitle = String(title || job.project).slice(0, 120);
     const written = await writeReport(job, {
@@ -95,6 +95,7 @@ const createReport = async (req, res) => {
       industry: industry ? String(industry).slice(0, 80) : null,
       modelName: model?.modelVersion || null,
       labelled: labelled && typeof labelled === 'object' ? labelled : undefined,
+      names: names && typeof names === 'object' ? names : undefined,
     });
 
     const report = await PlaygroundReport.create({
