@@ -29,3 +29,6 @@ docs
 inference-jobs-diagnostic-report.json
 deletetesting.txt
 *.code-workspace
+
+# Local test reports
+reports

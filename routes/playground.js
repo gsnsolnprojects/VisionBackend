@@ -12,6 +12,10 @@ const {
   startPracticeAutoLabel,
   getPracticeAutoLabel,
   practiceDone,
+  startLevelOneTest,
+  getLevels,
+  postLevelStart,
+  postLevelProgress,
 } = require('../controllers/playgroundController');
 
 /** Playground tests and reports (controllers/playgroundController.js) */
@@ -27,5 +31,9 @@ router.delete('/reports/:id', authenticateToken, requirePermission('runInference
 router.post('/practice/auto-label', authenticateToken, requirePermission('runInference'), startPracticeAutoLabel);
 router.post('/practice/done', authenticateToken, requirePermission('viewProjects'), practiceDone);
 router.get('/practice/auto-label/:inferenceId', authenticateToken, requirePermission('viewInferenceResults'), getPracticeAutoLabel);
+router.post('/level1/test', authenticateToken, requirePermission('runInference'), startLevelOneTest);
+router.get('/levels', authenticateToken, requirePermission('viewProjects'), getLevels);
+router.post('/levels/start', authenticateToken, requirePermission('viewProjects'), postLevelStart);
+router.post('/levels/progress', authenticateToken, requirePermission('viewProjects'), postLevelProgress);
 
 module.exports = router;

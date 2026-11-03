@@ -164,7 +164,7 @@ const inferenceJobSchema = new mongoose.Schema({
   // use up the monthly prediction allowance or count as one of the student's predictions.
   purpose: {
     type: String,
-    enum: ['practice', null],
+    enum: ['practice', 'learning', null],
     default: null
   },
 

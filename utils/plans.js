@@ -20,7 +20,7 @@ const PLANS = {
     priceMonthlyInr: 999,
     limits: {
       users: 1,
-      projects: 2,
+      projects: 1,
       liveCameraStreams: 0,
       ownDatasets: 1,
       imagesPerDataset: 500,
@@ -39,7 +39,7 @@ const PLANS = {
       configurableAlerts: false,
     },
     highlights: [
-      '1 user · 2 projects',
+      '1 user · 1 project',
       '1 dataset of your own (up to 500 images, 5 MB each) plus GSN sample datasets',
       '5 training runs a month (nano and small models, latest 2 kept)',
       '1,000 image predictions a month (no live camera)',
