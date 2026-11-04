@@ -12,6 +12,12 @@ const Observation = require('../models/Observation');
 const ObservationCounter = require('../models/ObservationCounter');
 const MobileInspectConfig = require('../models/MobileInspectConfig');
 const AuditLog = require('../models/AuditLog');
+const PlaygroundLevelProgress = require('../models/PlaygroundLevelProgress');
+const PlaygroundProgress = require('../models/PlaygroundProgress');
+const PlaygroundReport = require('../models/PlaygroundReport');
+const UsageCarryover = require('../models/UsageCarryover');
+const StationRun = require('../models/StationRun');
+const StationDefect = require('../models/StationDefect');
 const { getSupabaseClient } = require('../services/supabaseService');
 const razorpay = require('../services/razorpayService');
 const auditService = require('../services/auditService');
@@ -33,6 +39,7 @@ const { removeLibraryEntriesForDatasets } = require('../services/sampleLibrarySe
  * GET    /api/admin/companies
  * PATCH  /api/admin/companies/:companyId/unlimited  { isUnlimited: boolean }
  * DELETE /api/admin/companies/:companyId      { confirmName }
+ * POST   /api/admin/companies/:companyId/reset { confirmName }
  * GET    /api/admin/revenue
  * GET    /api/admin/jobs?type=training|inference&status=&company=
  * GET    /api/admin/audit
@@ -546,6 +553,117 @@ async function removeCompanyFolder(baseDir, companyName) {
 }
 
 /**
+ * Deletes everything a company has made, in MongoDB and on disk: datasets, models, jobs, results,
+ * reports, level progress and this month's usage. The audit log stays as history.
+ */
+async function deleteCompanyData(companyName) {
+  const datasetIds = (await Dataset.find({ company: companyName }).select('_id').lean()).map((d) => d._id);
+  const testFolders = (await InferenceJob.find({ company: companyName }).select('customFolderPath').lean())
+    .map((job) => job.customFolderPath)
+    .filter(Boolean);
+  const mongo = {};
+  mongo.sampleLibraryEntries = await removeLibraryEntriesForDatasets(datasetIds);
+  mongo.images = (await Image.deleteMany({ datasetId: { $in: datasetIds } })).deletedCount;
+  mongo.annotations = (await Annotation.deleteMany({ datasetId: { $in: datasetIds } })).deletedCount;
+  mongo.categories = (await Category.deleteMany({ datasetId: { $in: datasetIds } })).deletedCount;
+  for (const [label, M] of Object.entries({
+    datasets: Dataset,
+    models: Model,
+    trainingJobs: TrainingJob,
+    inferenceJobs: InferenceJob,
+    actionItems: ActionItem,
+    observations: Observation,
+    observationCounters: ObservationCounter,
+    mobileInspectConfigs: MobileInspectConfig,
+    levelProgress: PlaygroundLevelProgress,
+    playgroundProgress: PlaygroundProgress,
+    reports: PlaygroundReport,
+    usageCarryover: UsageCarryover,
+    stationRuns: StationRun,
+    stationDefects: StationDefect,
+  })) {
+    mongo[label] = (await M.deleteMany({ company: companyName })).deletedCount;
+  }
+
+  for (const dir of ['datasets', 'results', 'models', path.join('reports', 'playground')]) {
+    await removeCompanyFolder(dir, companyName);
+  }
+  // Photos of tests still open, kept in one shared folder: only inside it
+  const tempRoot = path.resolve(process.cwd(), 'uploads', 'inference-temp') + path.sep;
+  for (const folder of testFolders) {
+    const target = path.resolve(folder);
+    if (target.startsWith(tempRoot)) await fs.rm(target, { recursive: true, force: true });
+  }
+  return mongo;
+}
+
+/**
+ * POST /api/admin/companies/:companyId/reset  { confirmName }
+ * Starts a company afresh: all it has made goes, and it's as if it had just signed up. The company,
+ * its members and its plan stay, so nothing is charged, cancelled or lost there.
+ */
+const resetCompany = async (req, res) => {
+  const steps = [];
+  try {
+    const { companyId } = req.params;
+    const confirmName = String(req.body?.confirmName || '').trim().toLowerCase();
+
+    const supabase = getSupabaseClient();
+    const company = unwrap(await supabase.from('companies').select('id, name').eq('id', companyId).maybeSingle());
+    if (!company) return res.status(404).json({ error: 'Not found', message: 'Company not found' });
+    if (isGsn(company.name)) {
+      return res.status(403).json({ error: 'Not allowed', message: 'The gsn company cannot be reset' });
+    }
+    if (confirmName !== company.name.trim().toLowerCase()) {
+      return res.status(400).json({ error: 'Confirmation failed', message: 'Type the company name exactly to confirm' });
+    }
+
+    const companyName = company.name;
+    const [activeTraining, activeInference, activeDatasets] = await Promise.all([
+      TrainingJob.countDocuments({ company: companyName, status: { $in: ACTIVE_JOB_STATUSES } }),
+      InferenceJob.countDocuments({ company: companyName, status: { $in: ACTIVE_JOB_STATUSES } }),
+      Dataset.countDocuments({
+        company: companyName,
+        deletedAt: null,
+        $or: [{ status: { $in: ['queued', 'processing'] } }, { augmentationStatus: 'running' }],
+        updatedAt: { $gte: new Date(Date.now() - 60 * 60 * 1000) },
+      }),
+    ]);
+    if (activeTraining + activeInference + activeDatasets > 0) {
+      return res.status(409).json({
+        error: 'Work still running',
+        message: `This company has ${activeTraining} training, ${activeInference} test and ${activeDatasets} dataset job(s) running. Wait for them or cancel them first.`,
+      });
+    }
+
+    const mongo = await deleteCompanyData(companyName);
+    steps.push('deleted datasets, models, jobs, reports, progress and files');
+
+    const { error: projectsError } = await supabase.from('projects').delete().eq('company_id', companyId);
+    if (projectsError) throw projectsError;
+    steps.push('deleted projects');
+    invalidateCompanyCache(companyId);
+
+    auditService.logAction({
+      action: 'delete',
+      resourceType: 'company',
+      resourceId: companyId,
+      details: { company: companyName, change: 'account reset: all data deleted, plan kept', mongo, by: 'superadmin' },
+      req,
+    });
+
+    res.json({ success: true, companyId, steps, deleted: mongo });
+  } catch (error) {
+    console.error('[admin] reset company failed:', error, 'completed steps:', steps);
+    res.status(500).json({
+      error: 'Could not finish resetting the company',
+      message: error.message,
+      completedSteps: steps,
+    });
+  }
+};
+
+/**
  * DELETE /api/admin/companies/:companyId  { confirmName }
  * Permanently deletes a company and everything it owns. Members keep their login
  * but are removed from the company (they can create or join another one).
@@ -604,32 +722,9 @@ const deleteCompany = async (req, res) => {
     if (companyError) throw companyError;
     steps.push('deleted company, projects and invites');
 
-    // 4) MongoDB data (audit log is kept as history)
-    const datasetIds = (await Dataset.find({ company: companyName }).select('_id').lean()).map((d) => d._id);
-    const mongo = {};
-    mongo.sampleLibraryEntries = await removeLibraryEntriesForDatasets(datasetIds);
-    mongo.images = (await Image.deleteMany({ datasetId: { $in: datasetIds } })).deletedCount;
-    mongo.annotations = (await Annotation.deleteMany({ datasetId: { $in: datasetIds } })).deletedCount;
-    mongo.categories = (await Category.deleteMany({ datasetId: { $in: datasetIds } })).deletedCount;
-    for (const [label, M] of Object.entries({
-      datasets: Dataset,
-      models: Model,
-      trainingJobs: TrainingJob,
-      inferenceJobs: InferenceJob,
-      actionItems: ActionItem,
-      observations: Observation,
-      observationCounters: ObservationCounter,
-      mobileInspectConfigs: MobileInspectConfig,
-    })) {
-      mongo[label] = (await M.deleteMany({ company: companyName })).deletedCount;
-    }
-    steps.push('deleted datasets, models, jobs and results records');
-
-    // 5) Files on disk
-    for (const dir of ['datasets', 'results', 'models']) {
-      await removeCompanyFolder(dir, companyName);
-    }
-    steps.push('deleted dataset, model and result files');
+    // 4) MongoDB data and files on disk (audit log is kept as history)
+    const mongo = await deleteCompanyData(companyName);
+    steps.push('deleted datasets, models, jobs, results and files');
 
     auditService.logAction({
       action: 'delete',
@@ -758,6 +853,8 @@ module.exports = {
   setCompanyUnlimited,
   setCompanyPlaygroundAccess,
   deleteCompany,
+  resetCompany,
+  deleteCompanyData,
   getRevenue,
   listJobs,
   listAudit,

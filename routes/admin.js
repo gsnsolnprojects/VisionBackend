@@ -11,6 +11,7 @@ const {
   setCompanyUnlimited,
   setCompanyPlaygroundAccess,
   deleteCompany,
+  resetCompany,
   getRevenue,
   listJobs,
   listAudit,
@@ -65,6 +66,7 @@ router.get('/companies', listCompanies);
 router.patch('/companies/:companyId/unlimited', setCompanyUnlimited);
 router.patch('/companies/:companyId/playground', setCompanyPlaygroundAccess);
 router.delete('/companies/:companyId', deleteCompany);
+router.post('/companies/:companyId/reset', resetCompany);
 router.get('/revenue', getRevenue);
 router.get('/jobs', listJobs);
 router.get('/audit', listAudit);
