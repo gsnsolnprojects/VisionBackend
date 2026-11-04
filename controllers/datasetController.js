@@ -25,6 +25,7 @@ const {
 } = require('../middleware/customerAccessMiddleware');
 const { sanitizeString } = require('../middleware/xssSanitizer');
 const PlaygroundLevelProgress = require('../models/PlaygroundLevelProgress');
+const { isCopyName, removeCopies } = require('../services/datasetCopies');
 
 /** Map an Image row to train / val / test using folder name or storedPath. */
 function classifySplitFolder(folder, storedPath) {
@@ -2532,7 +2533,7 @@ const startAugmentation = async (req, res) => {
         : null;
 
     // Customers (Playground): their own labelled dataset only, up to CUSTOMER_AUGMENT_MAX photos in
-    // all, each copy in the same set as its photo, one augmented version per dataset (a new one replaces it)
+    // all. The copies go into this same dataset, replacing any made before, so there is only one set.
     if (!isGsnUser(req.user)) {
       if (dataset.isAugmented) {
         return res.status(400).json({ error: 'Make more photos from the original dataset, not from an augmented one.' });
@@ -2543,8 +2544,7 @@ const startAugmentation = async (req, res) => {
           error: `Label at least ${CUSTOMER_MIN_LABELLED} photos first (${labelled} so far).`,
         });
       }
-      // The target is the photos in the new version in all: the labelled photos plus their copies.
-      // The new version is a dataset of its own, so it gets the plan's whole photos per dataset.
+      // The target is the labelled photos plus their copies, in all
       const perDataset = req.user.access?.limits?.imagesPerDataset ?? CUSTOMER_AUGMENT_MAX;
       const room = Math.min(CUSTOMER_AUGMENT_MAX, perDataset);
       targetTrainTotal = Math.min(targetTrainTotal || room, room);
@@ -2585,7 +2585,7 @@ const startAugmentation = async (req, res) => {
       valTestMultiplier,
       augmentationMultiplier,
       imageIds,
-      copiesStayWithPhoto: !isGsnUser(req.user),
+      intoSameDataset: !isGsnUser(req.user),
     };
 
     const job = await augmentationQueue.add(jobPayload, {
@@ -3647,6 +3647,8 @@ const deleteDatasetFile = async (req, res) => {
         $or: [{ storedPath: file.storedPath }, { filename: file.storedName }],
       }).select('storedPath').lean();
       const actualPath = indexed?.storedPath || file.storedPath;
+      // Copies of a photo go with it
+      if (!isCopyName(file.storedName)) await removeCopies(dataset, path.parse(file.storedName).name);
       await removeLocalFileIfExists(path.join(datasetPath, actualPath));
       await removeLocalFileIfExists(path.join(datasetPath, getLabelFilePath(actualPath)));
       // The upload also leaves a copy here when it splits the photos

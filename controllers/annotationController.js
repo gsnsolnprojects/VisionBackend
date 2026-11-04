@@ -20,6 +20,7 @@ const {
 } = require('../utils/yoloConverter');
 const { splitDataset } = require('../utils/splitDataset');
 const { isGsnUser, countPendingTrainings } = require('../middleware/customerAccessMiddleware');
+const { COPY_NAME, removeCopies } = require('../services/datasetCopies');
 
 /**
  * Annotation Controller
@@ -1251,6 +1252,19 @@ const convertAnnotationsToYOLO = async (req, res) => {
       return sendError(res, 409, 'Training running', 'A training is running. Save again when it finishes.');
     }
 
+    // A customer's extra photos were made from the labels as they were: nothing changed, nothing to
+    // do (this also keeps their split); labels changed, so they're out of date and go
+    let copiesRemoved = 0;
+    if (!isGsnUser(req.user) && (await Image.exists({ datasetId, filename: COPY_NAME }))) {
+      const since = dataset.conversionMetadata?.convertedAt;
+      const changed = goodImageIds.size > 0 || !since
+        || (await Annotation.exists({ datasetId, updatedAt: { $gt: since } }));
+      if (!changed) {
+        return res.status(200).json({ converted: 0, status: dataset.status, message: 'Labels are up to date.' });
+      }
+      copiesRemoved = await removeCopies(dataset);
+    }
+
     // Get ordered categories (for class_id mapping)
     const categories = await Category.getOrderedCategories(datasetId);
     if (categories.length === 0) {
@@ -1529,6 +1543,7 @@ const convertAnnotationsToYOLO = async (req, res) => {
       converted: converted,
       labelFilesCreated: labelFilesCreated,
       emptyLabelsCreated: emptyLabelsCreated,
+      copiesRemoved,
       status: 'ready_to_train',
       unannotatedImages: unannotatedImageList.length > 0 ? unannotatedImageList : undefined,
       message: 'Annotations converted to YOLO format. Dataset ready for training.'

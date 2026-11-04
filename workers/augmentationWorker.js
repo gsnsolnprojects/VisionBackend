@@ -16,6 +16,7 @@ const Image = require('../models/Image');
 const Category = require('../models/Category');
 const storageAdapter = require('../services/storageAdapter');
 const { splitDatasetByGroup, splitShares } = require('../utils/splitDataset');
+const { isCopyName, photoOfCopy, removeCopies } = require('../services/datasetCopies');
 const { getLabelFilePath } = require('../utils/yoloConverter');
 
 /**
@@ -258,6 +259,136 @@ async function computeFolderSize(rootPath) {
  *   targetSize?: number
  * }
  */
+/**
+ * Playground: extra photos go into the student's own dataset, so there is only ever one set. The
+ * labelled photos stay in the train/val/test set they are in, each copy joins its photo's set (the
+ * model is never tested on a photo it learned from), and each set grows to its share of the total.
+ */
+async function addCopiesToDataset(dataset, jobId, total) {
+  const root = storageAdapter.datasetRoot(dataset);
+  const work = path.join(root, '_aug_work');
+  const SETS = ['train', 'val', 'test'];
+
+  await removeCopies(dataset);
+  const photos = (await Image.find({ datasetId: dataset._id, hasLabels: true, folder: { $in: SETS } }).lean())
+    .filter((img) => !isCopyName(img.filename))
+    .map((img) => ({
+      name: img.filename,
+      set: img.folder,
+      image: path.join(root, img.storedPath),
+      label: path.join(root, getLabelFilePath(img.storedPath)),
+    }));
+  if (!photos.length) throw new Error('No labeled images found in this dataset. Label some photos first.');
+
+  const inHere = (set) => photos.filter((p) => p.set === set).length;
+  const shares = splitShares(dataset);
+  const wanted = { val: Math.round(total * shares.val), test: Math.round(total * shares.test) };
+  wanted.train = total - wanted.val - wanted.test;
+  const left = {};
+  let perPhoto = 1;
+  for (const set of SETS) {
+    left[set] = inHere(set) ? Math.max(0, wanted[set] - inHere(set)) : 0;
+    if (inHere(set)) perPhoto = Math.max(perPhoto, Math.ceil(left[set] / inHere(set)));
+  }
+
+  try {
+    await fs.rm(work, { recursive: true, force: true });
+    await storageAdapter.ensureDir(path.join(work, 'in', 'images', 'train'));
+    await storageAdapter.ensureDir(path.join(work, 'in', 'labels', 'train'));
+    for (const p of photos) {
+      await storageAdapter.copyFile(p.image, path.join(work, 'in', 'images', 'train', p.name));
+      await storageAdapter.copyFile(p.label, path.join(work, 'in', 'labels', 'train', `${path.parse(p.name).name}.txt`));
+    }
+    const made = await runPythonAugmentation({
+      inputRoot: path.join(work, 'in'),
+      outputRoot: path.join(work, 'out'),
+      targetTrainTotal: perPhoto * photos.length,
+      valTestMultiplier: 1,
+      targetSize: 640,
+      jobId,
+      datasetId: dataset._id.toString(),
+    });
+    if (made.exitCode !== 0) throw new Error(made.stderr || made.stdout || `Python augmentation exited with code ${made.exitCode}`);
+    const fixed = await runPythonFixLabels({ labelsRoot: path.join(work, 'out', 'labels') });
+    if (fixed.exitCode !== 0) throw new Error(fixed.stderr || fixed.stdout || `Python fix_labels exited with code ${fixed.exitCode}`);
+
+    const setOf = new Map(photos.map((p) => [path.parse(p.name).name.toLowerCase(), p.set]));
+    const copyIndex = (name) => parseInt((path.parse(name).name.match(/_aug_(\d+)$/) || [])[1] || '0', 10);
+    const candidates = (await fs.readdir(path.join(work, 'out', 'images', 'train')))
+      .filter(isCopyName)
+      .sort((a, b) => copyIndex(a) - copyIndex(b) || a.localeCompare(b));
+    // Each set's share first; if some photo's copies fell short, the rest fill up to the total
+    const chosen = candidates.filter((name) => {
+      const set = setOf.get(photoOfCopy(name).toLowerCase());
+      if (!(left[set] > 0)) return false;
+      left[set] -= 1;
+      return true;
+    });
+    const room = Math.max(0, total - photos.length - chosen.length);
+    chosen.push(...candidates.filter((name) => !chosen.includes(name)).slice(0, room));
+
+    const shownNames = new Map(
+      (dataset.files || []).filter((f) => f.type === 'image').map((f) => [path.parse(f.storedName).name.toLowerCase(), f.originalName || f.storedName]),
+    );
+    const sharp = require('sharp');
+    for (const name of chosen) {
+      const photo = photoOfCopy(name);
+      const set = setOf.get(photo.toLowerCase());
+      if (!set) continue;
+      const labelName = `${path.parse(name).name}.txt`;
+      const labelFrom = path.join(work, 'out', 'labels', 'train', labelName);
+      if (!(await storageAdapter.exists(labelFrom))) continue;
+      const storedPath = `images/${set}/${name}`;
+      await storageAdapter.ensureDir(path.join(root, 'images', set));
+      await storageAdapter.ensureDir(path.join(root, 'labels', set));
+      await storageAdapter.copyFile(path.join(work, 'out', 'images', 'train', name), path.join(root, storedPath));
+      await storageAdapter.copyFile(labelFrom, path.join(root, getLabelFilePath(storedPath)));
+      const { size } = await fs.stat(path.join(root, storedPath));
+      const meta = await sharp(path.join(root, storedPath)).metadata();
+      const uploaded = shownNames.get(photo.toLowerCase()) || photo;
+      const { ext } = path.parse(name);
+      dataset.files.push({
+        storedName: name,
+        originalName: `${path.parse(uploaded).name}_copy${copyIndex(name)}${ext}`,
+        type: 'image',
+        size,
+        folder: set,
+        storedPath,
+      });
+      await Image.findOneAndUpdate(
+        { datasetId: dataset._id, storedPath },
+        {
+          datasetId: dataset._id,
+          filename: name,
+          storedPath,
+          folder: set,
+          size,
+          width: meta.width || 1,
+          height: meta.height || 1,
+          hasLabels: true,
+          hasAnnotations: false,
+          convertedAt: new Date(),
+        },
+        { upsert: true, new: true },
+      );
+    }
+  } finally {
+    await fs.rm(work, { recursive: true, force: true }).catch(() => undefined);
+  }
+
+  dataset.markModified('files');
+  dataset.trainCount = await Image.countDocuments({ datasetId: dataset._id, folder: 'train' });
+  dataset.valCount = await Image.countDocuments({ datasetId: dataset._id, folder: 'val' });
+  dataset.testCount = await Image.countDocuments({ datasetId: dataset._id, folder: 'test' });
+  dataset.totalImages = await Image.countDocuments({ datasetId: dataset._id });
+  dataset.labeledImages = await Image.countDocuments({ datasetId: dataset._id, hasLabels: true });
+  dataset.sizeBytes = await computeFolderSize(root);
+  dataset.augmentationStatus = 'succeeded';
+  dataset.augmentationError = undefined;
+  dataset.isActive = true;
+  await dataset.save();
+}
+
 const processAugmentationJob = async (job) => {
   const {
     datasetId,
@@ -267,9 +398,8 @@ const processAugmentationJob = async (job) => {
     targetSize,
     augmentationMultiplier,
     imageIds,
-    // Playground: only the originals are split, and every copy goes into the same set as the photo
-    // it was made from, so the model is never tested on a photo it learned from (scores stay honest)
-    copiesStayWithPhoto = false,
+    // Playground: the copies go into the student's own dataset (see addCopiesToDataset)
+    intoSameDataset = false,
   } = job.data || {};
 
   console.log('[AUGMENT-WORKER] Processing augmentation job', {
@@ -336,6 +466,12 @@ const processAugmentationJob = async (job) => {
     // Mark original as running (non-destructive to status)
     originalDataset.augmentationStatus = 'running';
     await originalDataset.save();
+
+    if (intoSameDataset) {
+      await addCopiesToDataset(originalDataset, job.id, targetTrainTotal);
+      activeAugmentations.delete(job.id);
+      return { augmentedDatasetId: originalDataset._id.toString() };
+    }
 
     const versionNameTrimmed = typeof versionName === 'string' ? versionName.trim() : '';
     if (!versionNameTrimmed) {
@@ -472,29 +608,6 @@ const processAugmentationJob = async (job) => {
       });
     }
 
-    // Photos with a defect and good photos (empty label file) are split separately, so both
-    // show up in train, val and test
-    const readGroups = async (items) => {
-      for (const item of items) {
-        let content = '';
-        try {
-          content = await fs.readFile(item.labelPath, 'utf8');
-        } catch {}
-        item.group = content.trim() ? 'defect' : 'good';
-      }
-    };
-    const groupOf = (item) => item.group;
-    let originalsSplit = null;
-    const splitOfPhoto = new Map();
-    if (copiesStayWithPhoto) {
-      const originals = [...passthroughPool, ...scopedPool];
-      await readGroups(originals);
-      originalsSplit = splitDatasetByGroup(originals, originalDataset, groupOf);
-      for (const set of ['train', 'val', 'test']) {
-        for (const item of originalsSplit[set]) splitOfPhoto.set(path.parse(item.storedName).name.toLowerCase(), set);
-      }
-    }
-
     // ---------- 2. Temp dirs: input pool (scoped images) and output pool (Python writes augmented here) ----------
     const inputPoolRoot = path.join(outputRoot, '_input_pool');
     const outputPoolRoot = path.join(outputRoot, '_output_pool');
@@ -536,35 +649,8 @@ const processAugmentationJob = async (job) => {
     // Python generates additional variants; aim so originals + augs ≈ desiredTotal
     const additionalNeeded = Math.max(0, desiredTotal - scopedPool.length);
     // Ask Python for at least `additionalNeeded` variants (it creates ceil(target/n)*n files)
-    let effectiveTargetTrainTotal =
+    const effectiveTargetTrainTotal =
       additionalNeeded > 0 ? Math.max(additionalNeeded, scopedPool.length) : scopedPool.length;
-
-    // Copies each set still needs for the whole version to reach the normal train/val/test shares,
-    // and so how many per photo Python must make (the set with the fewest photos per copy decides)
-    let copiesWanted = null;
-    if (originalsSplit && additionalNeeded > 0) {
-      const total = desiredTotal + passthroughPool.length;
-      const shares = splitShares(originalDataset);
-      const val = Math.round(total * shares.val);
-      const test = Math.round(total * shares.test);
-      const wanted = { train: total - val - test, val, test };
-      const scopedNames = new Set(scopedPool.map((p) => p.storedName.toLowerCase()));
-      copiesWanted = {};
-      let perPhoto = 1;
-      for (const set of ['val', 'test', 'train']) {
-        const photos = originalsSplit[set].filter((p) => scopedNames.has(p.storedName.toLowerCase())).length;
-        const needed = Math.max(0, wanted[set] - originalsSplit[set].length);
-        // A set with no photos to copy leaves its share to train
-        if (!photos && set !== 'train') {
-          wanted.train += needed;
-          copiesWanted[set] = 0;
-          continue;
-        }
-        copiesWanted[set] = needed;
-        if (photos) perPhoto = Math.max(perPhoto, Math.ceil(needed / photos));
-      }
-      effectiveTargetTrainTotal = perPhoto * scopedPool.length;
-    }
 
     const effectiveValTestMultiplier =
       typeof valTestMultiplier === 'number' && valTestMultiplier > 0 ? valTestMultiplier : 2;
@@ -626,21 +712,7 @@ const processAugmentationJob = async (job) => {
         return m ? parseInt(m[1], 10) : 0;
       };
       augEntries.sort((a, b) => copyIndex(a.name) - copyIndex(b.name) || a.name.localeCompare(b.name));
-      const copySet = (name) => splitOfPhoto.get(path.parse(name).name.replace(/_aug_\d+$/, '').toLowerCase()) || 'train';
-      // Python makes more than needed: take what each set wants first; if a photo's copies fell short, the rest fill up
-      const inOrder = copiesWanted
-        ? [
-            ...augEntries.filter((entry) => {
-              const set = copySet(entry.name);
-              if (copiesWanted[set] <= 0) return false;
-              copiesWanted[set] -= 1;
-              entry.wanted = true;
-              return true;
-            }),
-            ...augEntries.filter((entry) => !entry.wanted),
-          ]
-        : augEntries;
-      for (const entry of inOrder) {
+      for (const entry of augEntries) {
         if (scopedCount >= desiredTotal) break;
         if (!entry.isFile()) continue;
         const storedName = entry.name;
@@ -658,7 +730,6 @@ const processAugmentationJob = async (job) => {
           storedPath,
           sourcePath: path.join(outputPoolRoot, storedPath),
           labelPath: fullLabelPath,
-          set: copySet(storedName),
         });
         scopedCount += 1;
       }
@@ -667,15 +738,16 @@ const processAugmentationJob = async (job) => {
     }
 
     // ---------- 5. Canonical split once (same seed/ratios as preprocessing and post-annotation) ----------
-    await readGroups(combinedList);
-    let { train: trainList, val: valList, test: testList } = originalsSplit
-      ?? splitDatasetByGroup(combinedList, originalDataset, groupOf);
-    if (originalsSplit) {
-      const copies = combinedList.slice(originalsCount);
-      trainList = [...trainList, ...copies.filter((c) => c.set === 'train')];
-      valList = [...valList, ...copies.filter((c) => c.set === 'val')];
-      testList = [...testList, ...copies.filter((c) => c.set === 'test')];
+    // Photos with a defect and good photos (empty label file) are split separately, so both
+    // show up in train, val and test
+    for (const item of combinedList) {
+      let content = '';
+      try {
+        content = await fs.readFile(item.labelPath, 'utf8');
+      } catch {}
+      item.group = content.trim() ? 'defect' : 'good';
     }
+    let { train: trainList, val: valList, test: testList } = splitDatasetByGroup(combinedList, originalDataset, (item) => item.group);
 
     // ✅ Hard guarantee: no filename in more than one split (defensive; splitDataset is already disjoint by item)
     const enforceDisjointByFilename = (train, val, test) => {
@@ -819,20 +891,6 @@ const processAugmentationJob = async (job) => {
     let testCount = 0;
     const filesManifest = [];
     const countedImageNames = new Set();
-    // The name the student knows a photo by; a copy of "board1.jpg" reads "board1_copy3.jpg"
-    const uploadedNames = new Map(
-      (originalDataset.files || [])
-        .filter((f) => f.type === 'image' && f.storedName)
-        .map((f) => [f.storedName.toLowerCase(), f.originalName || f.storedName]),
-    );
-    const shownName = (storedName) => {
-      const direct = uploadedNames.get(storedName.toLowerCase());
-      if (direct) return direct;
-      const { name, ext } = path.parse(storedName);
-      const copy = name.match(/^(.*)_aug_(\d+)$/);
-      const source = copy && [...uploadedNames.entries()].find(([key]) => path.parse(key).name === copy[1].toLowerCase());
-      return source ? `${path.parse(source[1]).name}_copy${copy[2]}${ext}` : storedName;
-    };
 
     for (const split of ['train', 'val', 'test']) {
       const splitImagesDir = path.join(imagesRoot, split);
@@ -864,7 +922,7 @@ const processAugmentationJob = async (job) => {
 
           filesManifest.push({
             storedName,
-            originalName: shownName(storedName),
+            originalName: storedName,
             type: 'image',
             size: stat.size,
             folder: split,

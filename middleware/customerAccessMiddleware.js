@@ -140,7 +140,8 @@ async function countLabelledPhotos(dataset) {
     }
     for (const ent of entries) {
       if (ent.isDirectory()) await walk(path.join(dir, ent.name));
-      else if (ent.name.toLowerCase().endsWith('.txt')) names.add(ent.name.slice(0, -4).toLowerCase());
+      // Extra photos' labels are copies of these: the count is of the student's own labelled photos
+      else if (ent.name.toLowerCase().endsWith('.txt') && !/_aug_\d+\.txt$/i.test(ent.name)) names.add(ent.name.slice(0, -4).toLowerCase());
     }
   };
   if (dataset.storagePath) await walk(path.join(dataset.storagePath, 'labels'));

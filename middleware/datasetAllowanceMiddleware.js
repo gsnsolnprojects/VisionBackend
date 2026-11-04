@@ -3,6 +3,7 @@ const path = require('path');
 const mongoose = require('mongoose');
 const Dataset = require('../models/Dataset');
 const { ownDatasetFilter } = require('../utils/usage');
+const { isCopyName } = require('../services/datasetCopies');
 
 /**
  * Plan limits on uploaded datasets (Playground: 1 dataset of its own, up to 500 images,
@@ -60,13 +61,9 @@ const enforceDatasetAllowance = (kind) => async (req, res, next) => {
     } else {
       const { datasetId } = req.params;
       if (mongoose.Types.ObjectId.isValid(datasetId)) {
-        const dataset = await Dataset.findById(datasetId).select('totalImages').lean();
-        // Extra training photos made from this dataset are files on disk too: they count
-        const [extra] = await Dataset.aggregate([
-          { $match: { parentDatasetId: new mongoose.Types.ObjectId(datasetId), isAugmented: true, deletedAt: null } },
-          { $group: { _id: null, images: { $sum: { $ifNull: ['$totalImages', 0] } } } },
-        ]);
-        existingImages = (dataset?.totalImages || 0) + (extra?.images || 0);
+        const dataset = await Dataset.findById(datasetId).select('files').lean();
+        // Only photos the student added: making extra photos again replaces the copies
+        existingImages = (dataset?.files || []).filter((f) => f.type === 'image' && !isCopyName(f.storedName)).length;
       }
     }
 
