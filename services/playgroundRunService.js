@@ -2,6 +2,7 @@ const fs = require('fs');
 const fsPromises = require('fs').promises;
 const path = require('path');
 const PDFDocument = require('pdfkit');
+const ExcelJS = require('exceljs');
 const sharp = require('sharp');
 const InferenceJob = require('../models/InferenceJob');
 const PlaygroundReport = require('../models/PlaygroundReport');
@@ -12,8 +13,8 @@ const PlaygroundReport = require('../models/PlaygroundReport');
  * A Playground test (batch inference started by a Playground workspace) is short-lived:
  *  - "Close test" deletes its photos (results and uploads) and keeps the record, so the
  *    month's prediction count is unchanged
- *  - "Generate report" writes a PDF and a CSV with every photo, then closes the test; both are
- *    kept for PLAYGROUND_REPORT_LIFETIME_MS
+ *  - "Generate report" writes a PDF, and an Excel file and a CSV with every photo, then closes
+ *    the test; they are kept for PLAYGROUND_REPORT_LIFETIME_MS
  *  - tests left open close themselves PLAYGROUND_TEST_LIFETIME_MS after they started, and
  *    expired reports are deleted, by sweepPlayground() (run every few minutes by the server)
  */
@@ -151,12 +152,12 @@ function pickSamples(photos, rows) {
 
 /**
  * Write the PDF report for a finished test: a summary, one photo for each kind of defect, and a link
- * to the CSV with every photo.
+ * to the Excel file with every photo.
  * @param {object} job InferenceJob (lean or document)
  * @param {{ title: string, industry?: string|null, modelName?: string|null, labelled?: Record<string, string[]>, annexureUrl?: string, expiresAt?: Date }} info
  *   labelled: what the dataset labels say for held-out photos, by original file name
- *   annexureUrl: where the CSV can be downloaded, until expiresAt
- * @returns {Promise<{ filePath: string, csvPath: string, previewPath: string|null, sizeBytes: number, photos: number }>}
+ *   annexureUrl: where the Excel file can be downloaded, until expiresAt
+ * @returns {Promise<{ filePath: string, csvPath: string, excelPath: string, previewPath: string|null, sizeBytes: number, photos: number }>}
  */
 async function writeReport(job, info) {
   const photos = await readResultPhotos(job);
@@ -327,15 +328,15 @@ async function writeReport(job, info) {
     doc.y += 14;
   }
 
-  // Annexure: the link to the CSV
+  // Annexure: the link to the Excel file
   if (info.annexureUrl) {
     sectionTitle('Annexure: all photos', 70);
     doc.font('Helvetica').fontSize(9.5).fillColor(ink).text(
-      `Every one of the ${summary.total} photos tested, with its labels, defect counts and confidence, is in a spreadsheet (CSV file).`,
+      `Every one of the ${summary.total} photos tested is in an Excel file, each with its picture, labels, defect counts and confidence.`,
       40, doc.y, { width: W }
     );
     doc.y += 5;
-    doc.font('Helvetica-Bold').fontSize(10.5).fillColor(brand).text('Download the full photo list (CSV)', 40, doc.y, { link: info.annexureUrl, underline: true, width: W });
+    doc.font('Helvetica-Bold').fontSize(10.5).fillColor(brand).text('Download the full photo list (Excel)', 40, doc.y, { link: info.annexureUrl, underline: true, width: W });
     doc.y += 4;
     if (info.expiresAt) {
       const until = new Date(info.expiresAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' });
@@ -350,8 +351,9 @@ async function writeReport(job, info) {
   });
   const { size } = await fsPromises.stat(filePath);
   const csvPath = await writeReportCsv(info, photos, summary.rows, path.join(dir, `${job.inferenceId}.csv`));
+  const excelPath = await writeReportExcel(info, photos, summary.rows, path.join(dir, `${job.inferenceId}.xlsx`));
   const previewPath = await writePreview(photos[0], path.join(dir, `${job.inferenceId}.jpg`));
-  return { filePath, csvPath, previewPath, sizeBytes: size, photos: photos.length };
+  return { filePath, csvPath, excelPath, previewPath, sizeBytes: size, photos: photos.length };
 }
 
 const csvCell = (v) => {
@@ -398,6 +400,105 @@ async function writeReportCsv(info, photos, defects, csvPath) {
   return csvPath;
 }
 
+/** Pictures in the Excel file: shown at this size in pixels, stored at twice that so zooming stays clear */
+const EXCEL_PHOTO = { width: 200, height: 130 };
+const EXCEL_PHOTO_WORKERS = 4;
+
+/** Small JPEGs of all the photos, by photo. A photo that can't be read just has no picture. */
+async function excelThumbnails(photos) {
+  const thumbnails = new Map();
+  let next = 0;
+  const worker = async () => {
+    while (next < photos.length) {
+      const photo = photos[next++];
+      try {
+        thumbnails.set(photo, await sharp(photo.path)
+          .resize({ width: EXCEL_PHOTO.width * 2, height: EXCEL_PHOTO.height * 2, fit: 'inside' })
+          .jpeg({ quality: 70 })
+          .toBuffer({ resolveWithObject: true }));
+      } catch (err) {
+        console.warn(`[playground] no picture for ${photo.file}: ${err.message}`);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: EXCEL_PHOTO_WORKERS }, worker));
+  return thumbnails;
+}
+
+/** One row per photo: the same as the CSV, with the labelled picture next to it */
+async function writeReportExcel(info, photos, defects, excelPath) {
+  const labelledOf = (p) => info.labelled?.[p.originalName] || info.labelled?.[p.file];
+  const hasLabels = photos.some(labelledOf);
+  const brand = 'FF43209A';
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'GSN Solutions';
+  const sheet = workbook.addWorksheet('All photos', { views: [{ state: 'frozen', ySplit: 1 }] });
+  const columns = [
+    { header: 'No.', width: 6 },
+    { header: 'Photo', width: 30 },
+    { header: 'File name', width: 28 },
+    { header: 'Result', width: 9 },
+    { header: 'Model found', width: 26 },
+    { header: 'Total defects', width: 9 },
+    ...defects.map((d) => ({ header: d.name, width: 10 })),
+    { header: 'Confidence', width: 26 },
+    ...(hasLabels ? [{ header: 'Labelled in the dataset', width: 26 }] : []),
+    { header: 'Photo size', width: 13 },
+  ];
+  sheet.columns = columns;
+  const lastColumn = sheet.getColumn(columns.length).letter;
+  sheet.autoFilter = `A1:${lastColumn}1`;
+
+  const header = sheet.getRow(1);
+  header.height = 34;
+  header.eachCell((cell) => {
+    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: brand } };
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+  });
+
+  const thumbnails = await excelThumbnails(photos);
+  photos.forEach((p, i) => {
+    const labelled = labelledOf(p);
+    const row = sheet.addRow([
+      p.number,
+      null,
+      shownName(info, p),
+      p.classes.length ? 'Defect' : 'Good',
+      p.found.length ? p.found.join(', ') : 'nothing',
+      p.classes.reduce((sum, c) => sum + c.count, 0),
+      ...defects.map((d) => p.classes.find((c) => c.name === d.name)?.count ?? 0),
+      p.classes
+        .filter((c) => c.confidence !== null)
+        .map((c) => `${c.name} ${Math.round(c.confidence * 100)}%`)
+        .join(', '),
+      ...(hasLabels ? [labelled ? (labelled.length ? labelled.map((l) => l.replace(/_/g, ' ')).join(', ') : 'nothing') : ''] : []),
+      p.width && p.height ? `${p.width} x ${p.height}` : '',
+    ]);
+    // Row heights are in points, pictures in pixels: 3 points to 4 pixels, with a little room around
+    row.height = (EXCEL_PHOTO.height * 3) / 4 + 8;
+    row.eachCell({ includeEmpty: true }, (cell) => {
+      cell.alignment = { vertical: 'middle', wrapText: true, ...(typeof cell.value === 'number' ? { horizontal: 'center' } : {}) };
+      cell.border = { bottom: { style: 'thin', color: { argb: 'FFDCD7F3' } } };
+    });
+    row.getCell(4).font = { bold: true, color: { argb: p.classes.length ? 'FFC0392B' : 'FF1E8449' } };
+
+    const thumbnail = thumbnails.get(p);
+    if (thumbnail) {
+      const image = workbook.addImage({ buffer: thumbnail.data, extension: 'jpeg' });
+      sheet.addImage(image, {
+        tl: { col: 1.03, row: i + 1.05 },
+        ext: { width: thumbnail.info.width / 2, height: thumbnail.info.height / 2 },
+        editAs: 'oneCell',
+      });
+    }
+  });
+
+  await workbook.xlsx.writeFile(excelPath);
+  return excelPath;
+}
+
 /** A small picture of the first result photo, for the reports list */
 async function writePreview(photo, previewPath) {
   if (!photo) return null;
@@ -409,9 +510,9 @@ async function writePreview(photo, previewPath) {
   }
 }
 
-/** Delete a report's files (PDF, CSV, preview) */
+/** Delete a report's files (PDF, CSV, Excel, preview) */
 async function removeReportFiles(report) {
-  for (const file of [report.filePath, report.csvPath, report.previewPath].filter(Boolean)) {
+  for (const file of [report.filePath, report.csvPath, report.excelPath, report.previewPath].filter(Boolean)) {
     await fsPromises.rm(file, { force: true }).catch(() => undefined);
   }
 }
@@ -432,7 +533,7 @@ async function sweepPlayground() {
     .lean();
   for (const job of due) await closeRun(job);
 
-  const expired = await PlaygroundReport.find({ expiresAt: { $lte: now } }).select('_id filePath csvPath previewPath').lean();
+  const expired = await PlaygroundReport.find({ expiresAt: { $lte: now } }).select('_id filePath csvPath excelPath previewPath').lean();
   for (const report of expired) {
     await removeReportFiles(report);
     await PlaygroundReport.deleteOne({ _id: report._id });

@@ -33,7 +33,7 @@ const {
  * GET    /api/playground/reports?projectId=        reports still available (all projects, or one)
  * GET    /api/playground/reports/:id/download      the PDF
  * GET    /api/playground/reports/:id/csv           the results as a spreadsheet
- * GET    /api/playground/annexure/:token           the same spreadsheet, from the link in the PDF (no sign-in)
+ * GET    /api/playground/annexure/:token           Excel file with every photo, from the link in the PDF (no sign-in)
  * GET    /api/playground/reports/:id/preview       small picture of the first photo
  * DELETE /api/playground/reports/:id               delete a report early
  * POST   /api/playground/practice/auto-label        { datasetId, fileIds } run GSN's model on sample photos
@@ -122,6 +122,7 @@ const createReport = async (req, res) => {
       photos: written.photos,
       filePath: written.filePath,
       csvPath: written.csvPath,
+      excelPath: written.excelPath,
       annexureToken,
       previewPath: written.previewPath,
       sizeBytes: written.sizeBytes,
@@ -222,12 +223,15 @@ const downloadAnnexure = async (req, res) => {
       annexureToken: String(req.params.token),
       expiresAt: { $gt: new Date() },
     }).lean();
-    if (!report || !report.csvPath || !fs.existsSync(report.csvPath)) {
+    // Reports made before the Excel file existed link to their CSV
+    const filePath = report?.excelPath || report?.csvPath;
+    if (!filePath || !fs.existsSync(filePath)) {
       return res.status(404).type('text/plain').send('This link has expired. Reports and their photo lists are kept for 24 hours.');
     }
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="${reportFileName(report, 'csv')}"`);
-    fs.createReadStream(report.csvPath).pipe(res);
+    const isExcel = filePath === report.excelPath;
+    res.setHeader('Content-Type', isExcel ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${reportFileName(report, isExcel ? 'xlsx' : 'csv')}"`);
+    fs.createReadStream(filePath).pipe(res);
   } catch (error) {
     res.status(500).type('text/plain').send('Could not download the photo list.');
   }
