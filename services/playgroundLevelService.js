@@ -63,6 +63,7 @@ const toJson = ({ progress: p, training }) => ({
   trainingJobId: p.trainingJobId,
   training,
   finishedAt: p.finishedAt,
+  startedAt: p.createdAt,
   updatedAt: p.updatedAt,
 });
 
