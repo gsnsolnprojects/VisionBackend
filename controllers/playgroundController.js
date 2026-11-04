@@ -16,6 +16,7 @@ const { SAMPLE_COMPANY } = require('../services/sampleLibraryService');
 const { canAccessAllWorkspaces } = require('../utils/workspaceScoping');
 const { markPracticeDone } = require('../services/playgroundProgressService');
 const { listLevels, startLevel, saveProgress } = require('../services/playgroundLevelService');
+const { syncBadges, markBadgesSeen } = require('../services/playgroundBadgeService');
 const { sampleRunKey, copySavedRun } = require('../services/sampleRunService');
 const {
   closeRun,
@@ -42,7 +43,9 @@ const {
  * POST   /api/playground/level1/test            { datasetId, fileIds } GSN's model on the sample's held-out photos
  * GET    /api/playground/levels                 the student's levels, latest first
  * POST   /api/playground/levels/start           { level, mission, industry, sample, projectId }
- * POST   /api/playground/levels/progress        { mission, step, practiceScore, trainingJobId }
+ * POST   /api/playground/levels/progress        { mission, step, practiceScore, cleanPhotos, trainingJobId, skipped }
+ * GET    /api/playground/badges                 the student's badges, with any newly earned saved
+ * POST   /api/playground/badges/seen            { ids } their award cards have been shown
  */
 
 /** Learn to label: at most this many photos per auto-label run, and runs per company a day */
@@ -530,8 +533,30 @@ const postLevelProgress = async (req, res) => {
   }
 };
 
+const getBadges = async (req, res) => {
+  try {
+    if (!req.user?.company) return res.json({ badges: [] });
+    res.json({ badges: await syncBadges(req.user) });
+  } catch (error) {
+    console.error('[playground] badges failed:', error);
+    res.status(500).json({ error: 'Could not load badges', message: error.message });
+  }
+};
+
+const postBadgesSeen = async (req, res) => {
+  try {
+    if (req.user?.company) await markBadgesSeen(req.user, req.body?.ids);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[playground] badges seen failed:', error);
+    res.status(500).json({ error: 'Could not save', message: error.message });
+  }
+};
+
 module.exports = {
   startLevelOneTest,
+  getBadges,
+  postBadgesSeen,
   getLevels,
   postLevelStart,
   postLevelProgress,

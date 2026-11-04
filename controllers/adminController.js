@@ -14,6 +14,7 @@ const MobileInspectConfig = require('../models/MobileInspectConfig');
 const AuditLog = require('../models/AuditLog');
 const PlaygroundLevelProgress = require('../models/PlaygroundLevelProgress');
 const PlaygroundProgress = require('../models/PlaygroundProgress');
+const PlaygroundBadge = require('../models/PlaygroundBadge');
 const PlaygroundReport = require('../models/PlaygroundReport');
 const UsageCarryover = require('../models/UsageCarryover');
 const StationRun = require('../models/StationRun');
@@ -577,6 +578,7 @@ async function deleteCompanyData(companyName) {
     mobileInspectConfigs: MobileInspectConfig,
     levelProgress: PlaygroundLevelProgress,
     playgroundProgress: PlaygroundProgress,
+    badges: PlaygroundBadge,
     reports: PlaygroundReport,
     usageCarryover: UsageCarryover,
     stationRuns: StationRun,

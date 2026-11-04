@@ -17,6 +17,8 @@ const {
   getLevels,
   postLevelStart,
   postLevelProgress,
+  getBadges,
+  postBadgesSeen,
 } = require('../controllers/playgroundController');
 
 /** Playground tests and reports (controllers/playgroundController.js) */
@@ -37,5 +39,7 @@ router.post('/level1/test', authenticateToken, requirePermission('runInference')
 router.get('/levels', authenticateToken, requirePermission('viewProjects'), getLevels);
 router.post('/levels/start', authenticateToken, requirePermission('viewProjects'), postLevelStart);
 router.post('/levels/progress', authenticateToken, requirePermission('viewProjects'), postLevelProgress);
+router.get('/badges', authenticateToken, requirePermission('viewProjects'), getBadges);
+router.post('/badges/seen', authenticateToken, requirePermission('viewProjects'), postBadgesSeen);
 
 module.exports = router;

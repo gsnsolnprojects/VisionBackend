@@ -18,8 +18,12 @@ const playgroundLevelProgressSchema = new mongoose.Schema(
     /** Supabase project id; null until a project exists (practice needs none) */
     projectId: { type: String, default: null },
     completedSteps: { type: [String], default: [] },
+    /** Steps passed without doing them (no ready-made model to test): they earn no badge */
+    skippedSteps: { type: [String], default: [] },
     /** Best label practice score so far, 0-1 */
     practiceScore: { type: Number, default: null },
+    /** Most practice photos labelled well without a hint, in one go */
+    cleanPhotos: { type: Number, default: 0 },
     /** The latest training run, so its result shows on resume even if the browser was closed */
     trainingJobId: { type: String, default: null },
     finishedAt: { type: Date, default: null },

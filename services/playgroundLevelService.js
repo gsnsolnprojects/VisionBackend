@@ -16,6 +16,28 @@ const OPTIONAL_STEPS = ['augment'];
 /** Far more than the real missions: only stops a client from filling the collection */
 const MAX_LEVELS_PER_USER = 50;
 
+/** Missions that have been renamed: a student's progress under the old name moves to the new one */
+const RENAMED_MISSIONS = {
+  'PCB defect detective': 'PCB Defect Inspection',
+  'Missing screw detective': 'Terminal Block Inspection',
+  'Blister pack inspector': 'Blister Pack Inspection',
+};
+const currentMission = (name) => RENAMED_MISSIONS[name] || name;
+
+async function moveRenamedMissions(user) {
+  const rows = await PlaygroundLevelProgress.find({
+    userId: user.id,
+    company: user.company,
+    mission: { $in: Object.keys(RENAMED_MISSIONS) },
+  }).select('mission').lean();
+  for (const row of rows) {
+    // Without timestamps, so the order of "the one they touched last" stays as it was
+    await PlaygroundLevelProgress.updateOne({ _id: row._id }, { $set: { mission: currentMission(row.mission) } }, { timestamps: false }).catch((err) => {
+      if (err.code !== 11000) throw err; // already has a row under the new name: that one counts
+    });
+  }
+}
+
 const requiredSteps = (level) => LEVEL_STEPS[level].filter((s) => !OPTIONAL_STEPS.includes(s));
 
 const nextStep = (level, completed) => requiredSteps(level).find((s) => !completed.includes(s)) || null;
@@ -58,8 +80,10 @@ const toJson = ({ progress: p, training }) => ({
   projectId: p.projectId,
   steps: requiredSteps(p.level),
   completedSteps: p.completedSteps,
+  skippedSteps: p.skippedSteps || [],
   nextStep: nextStep(p.level, p.completedSteps),
   practiceScore: p.practiceScore,
+  cleanPhotos: p.cleanPhotos || 0,
   trainingJobId: p.trainingJobId,
   training,
   finishedAt: p.finishedAt,
@@ -69,6 +93,7 @@ const toJson = ({ progress: p, training }) => ({
 
 /** The student's levels, the one they touched last first */
 async function listLevels(user) {
+  await moveRenamedMissions(user);
   const rows = await PlaygroundLevelProgress.find({ userId: user.id, company: user.company }).sort({ updatedAt: -1 }).lean();
   const levels = await Promise.all(rows.map(withTraining));
   return levels.map(toJson);
@@ -79,8 +104,9 @@ async function listLevels(user) {
  * projectId null when the old one was deleted, starts the level over. Null if the input is bad.
  */
 async function startLevel(user, { level, mission, industry, sample, projectId }) {
-  const missionName = shortText(mission, 120);
+  const missionName = currentMission(shortText(mission, 120));
   if (!LEVEL_STEPS[level] || !missionName) return null;
+  await moveRenamedMissions(user);
   const key = { userId: user.id, company: user.company, mission: missionName };
   const existing = await PlaygroundLevelProgress.findOne(key).select('projectId').lean();
   if (!existing) {
@@ -109,15 +135,22 @@ async function startLevel(user, { level, mission, industry, sample, projectId })
  * Saves what happened in a mission. A project opened outside the levels has no progress row, and a
  * step from another level (both levels share the project page) is ignored: both are normal.
  */
-async function saveProgress(user, { mission, step, practiceScore, trainingJobId }) {
-  const missionName = shortText(mission, 120);
+async function saveProgress(user, { mission, step, practiceScore, cleanPhotos, trainingJobId, skipped }) {
+  const missionName = currentMission(shortText(mission, 120));
   if (!missionName) return null;
+  await moveRenamedMissions(user);
   let progress = await PlaygroundLevelProgress.findOne({ userId: user.id, company: user.company, mission: missionName }).lean();
   if (!progress) return null;
 
   const update = {};
   if (typeof practiceScore === 'number' && practiceScore >= 0 && practiceScore <= 1) {
     update.$max = { practiceScore };
+  }
+  if (Number.isInteger(cleanPhotos) && cleanPhotos >= 0 && cleanPhotos <= 100) {
+    update.$max = { ...update.$max, cleanPhotos };
+  }
+  if (skipped === true && LEVEL_STEPS[progress.level].includes(step)) {
+    update.$addToSet = { skippedSteps: step };
   }
   const jobId = shortText(trainingJobId, 100);
   if (jobId && (await TrainingJob.exists({ jobId, company: user.company }))) {
