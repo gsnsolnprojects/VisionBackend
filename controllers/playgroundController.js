@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
 const InferenceJob = require('../models/InferenceJob');
@@ -32,6 +33,7 @@ const {
  * GET    /api/playground/reports?projectId=        reports still available (all projects, or one)
  * GET    /api/playground/reports/:id/download      the PDF
  * GET    /api/playground/reports/:id/csv           the results as a spreadsheet
+ * GET    /api/playground/annexure/:token           the same spreadsheet, from the link in the PDF (no sign-in)
  * GET    /api/playground/reports/:id/preview       small picture of the first photo
  * DELETE /api/playground/reports/:id               delete a report early
  * POST   /api/playground/practice/auto-label        { datasetId, fileIds } run GSN's model on sample photos
@@ -50,6 +52,13 @@ const PRACTICE_MAX_PHOTOS = 30;
 const PRACTICE_RUNS_PER_DAY = 10;
 const PRACTICE_CONFIDENCE = 0.4;
 const PRACTICE_LIFETIME_MS = 60 * 60 * 1000;
+
+/** The API's public address, for the link in the PDF. Behind CloudFront the request's host is the server's. */
+const publicApiUrl = (req) => {
+  if (process.env.PUBLIC_API_URL) return process.env.PUBLIC_API_URL.replace(/\/+$/, '');
+  const host = req.get('host') || '';
+  return /^(localhost|127\.0\.0\.1)(:|$)/.test(host) ? `${req.protocol}://${host}` : 'https://api.gsnsoln.in';
+};
 
 const ownsCompany = (req, company) =>
   canAccessAllWorkspaces(req.user) ||
@@ -90,12 +99,16 @@ const createReport = async (req, res) => {
     const { projectId, title, industry, labelled, names } = req.body || {};
     const model = job.modelId ? await Model.findById(job.modelId).select('modelVersion').lean() : null;
     const reportTitle = String(title || job.project).slice(0, 120);
+    const annexureToken = crypto.randomBytes(24).toString('hex');
+    const expiresAt = new Date(Date.now() + PLAYGROUND_REPORT_LIFETIME_MS);
     const written = await writeReport(job, {
       title: reportTitle,
       industry: industry ? String(industry).slice(0, 80) : null,
       modelName: model?.modelVersion || null,
       labelled: labelled && typeof labelled === 'object' ? labelled : undefined,
       names: names && typeof names === 'object' ? names : undefined,
+      annexureUrl: `${publicApiUrl(req)}/api/playground/annexure/${annexureToken}`,
+      expiresAt,
     });
 
     const report = await PlaygroundReport.create({
@@ -109,10 +122,11 @@ const createReport = async (req, res) => {
       photos: written.photos,
       filePath: written.filePath,
       csvPath: written.csvPath,
+      annexureToken,
       previewPath: written.previewPath,
       sizeBytes: written.sizeBytes,
       createdBy: req.user?.id || null,
-      expiresAt: new Date(Date.now() + PLAYGROUND_REPORT_LIFETIME_MS),
+      expiresAt,
     });
     await closeRun(job);
 
@@ -198,6 +212,24 @@ const downloadCsv = async (req, res) => {
     fs.createReadStream(report.csvPath).pipe(res);
   } catch (error) {
     res.status(500).json({ error: 'Could not download the spreadsheet', message: error.message });
+  }
+};
+
+/** The link in the PDF: no sign-in, as it opens from outside the app. Ends with the report. */
+const downloadAnnexure = async (req, res) => {
+  try {
+    const report = await PlaygroundReport.findOne({
+      annexureToken: String(req.params.token),
+      expiresAt: { $gt: new Date() },
+    }).lean();
+    if (!report || !report.csvPath || !fs.existsSync(report.csvPath)) {
+      return res.status(404).type('text/plain').send('This link has expired. Reports and their photo lists are kept for 24 hours.');
+    }
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${reportFileName(report, 'csv')}"`);
+    fs.createReadStream(report.csvPath).pipe(res);
+  } catch (error) {
+    res.status(500).type('text/plain').send('Could not download the photo list.');
   }
 };
 
@@ -505,6 +537,7 @@ module.exports = {
   listReports,
   downloadReport,
   downloadCsv,
+  downloadAnnexure,
   reportPreview,
   deleteReport,
   startPracticeAutoLabel,

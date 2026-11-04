@@ -87,6 +87,10 @@ app.use('/api', (req, res, next) => {
   if (req.method === 'POST' && req.path === '/subscription/webhook') {
     return next();
   }
+  // Skip authentication for a report's annexure link (opened from the PDF; the secret in the link is the access)
+  if (req.method === 'GET' && /^\/playground\/annexure\/[0-9a-f]{48}$/.test(req.path)) {
+    return next();
+  }
   // Apply authentication middleware
   authenticateToken(req, res, next);
 });

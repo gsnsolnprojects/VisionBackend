@@ -7,6 +7,7 @@ const {
   listReports,
   downloadReport,
   downloadCsv,
+  downloadAnnexure,
   reportPreview,
   deleteReport,
   startPracticeAutoLabel,
@@ -26,6 +27,7 @@ router.post('/runs/:inferenceId/report', authenticateToken, requirePermission('r
 router.get('/reports', authenticateToken, requirePermission('viewInferenceResults'), listReports);
 router.get('/reports/:id/download', authenticateToken, requirePermission('viewInferenceResults'), downloadReport);
 router.get('/reports/:id/csv', authenticateToken, requirePermission('viewInferenceResults'), downloadCsv);
+router.get('/annexure/:token', downloadAnnexure);
 router.get('/reports/:id/preview', authenticateToken, requirePermission('viewInferenceResults'), reportPreview);
 router.delete('/reports/:id', authenticateToken, requirePermission('runInference'), deleteReport);
 router.post('/practice/auto-label', authenticateToken, requirePermission('runInference'), startPracticeAutoLabel);

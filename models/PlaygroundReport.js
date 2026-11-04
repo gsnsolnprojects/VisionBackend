@@ -18,6 +18,8 @@ const playgroundReportSchema = new mongoose.Schema(
     filePath: { type: String, required: true },
     /** The same results as a spreadsheet (reports made before CSVs existed have none) */
     csvPath: { type: String, default: null },
+    /** Secret in the PDF's annexure link, which downloads the CSV without signing in */
+    annexureToken: { type: String, default: null, index: true },
     /** Small picture of the first photo, for the reports list */
     previewPath: { type: String, default: null },
     sizeBytes: { type: Number, default: 0 },
