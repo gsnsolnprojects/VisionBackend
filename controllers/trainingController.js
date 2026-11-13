@@ -8,6 +8,7 @@ const { checkCustomerTraining, isGsnUser } = require('../middleware/customerAcce
 const { buildWorkspaceFilter, validateWorkspaceAccess, canAccessAllWorkspaces } = require('../utils/workspaceScoping');
 const fs = require('fs');
 const path = require('path');
+const { gpuWait, estimateTrainingMinutes, STARTUP_MINUTES } = require('../utils/gpuWait');
 const { BlobServiceClient } = require('@azure/storage-blob');
 const {
   hydrateAndPersistModelMetrics,
@@ -792,10 +793,24 @@ const getTrainingStatus = async (req, res) => {
       model: null // ✅ Will be populated if model is registered
     };
 
-    // The server that starts the GPU writes this file while AWS has no GPU computer to give it
+    // Waiting for a GPU: since when, whether AWS has none free (and when we try next), and about how
+    // long it takes once one is found (utils/gpuWait)
     if (trainingJob.status === 'queued') {
-      const noGpuSince = await fs.promises.stat(path.join(process.cwd(), '.gpu-no-capacity')).catch(() => null);
-      response.noGpuAvailable = !!noGpuSince && Date.now() - noGpuSince.mtimeMs < 5 * 60 * 1000;
+      Object.assign(response, await gpuWait());
+      response.queuedAt = trainingJob.createdAt;
+      response.startupMinutes = STARTUP_MINUTES;
+    }
+    if (['queued', 'running'].includes(trainingJob.status)) {
+      const dataset = trainingJob.datasetId
+        ? await Dataset.findById(trainingJob.datasetId).select('trainCount valCount totalImages').lean().catch(() => null)
+        : null;
+      const hp = trainingJob.hyperparameters || {};
+      response.estimatedTrainingMinutes = estimateTrainingMinutes({
+        photos: dataset ? (dataset.trainCount || 0) + (dataset.valCount || 0) || dataset.totalImages : 0,
+        epochs: hp.epochs,
+        imgSize: hp.imgSize,
+        modelSize: trainingJob.modelSize,
+      });
     }
 
     // ✅ If training is completed, check if model was registered

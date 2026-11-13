@@ -1,5 +1,6 @@
 const PlaygroundLevelProgress = require('../models/PlaygroundLevelProgress');
 const TrainingJob = require('../models/TrainingJob');
+const { gpuWait } = require('../utils/gpuWait');
 
 /**
  * Playground levels: each one is a list of steps, saved per student and mission. "Continue" on the
@@ -50,13 +51,23 @@ const shortText = (value, max) => {
 /** Reads the training run's status; a completed run also completes the level's train step */
 async function withTraining(progress) {
   if (!progress.trainingJobId) return { progress, training: null };
-  const job = await TrainingJob.findOne({ jobId: progress.trainingJobId, company: progress.company }).select('status').lean();
+  const job = await TrainingJob.findOne({ jobId: progress.trainingJobId, company: progress.company })
+    .select('status createdAt startedAt completedAt')
+    .lean();
   if (!job) return { progress, training: null };
+  // Enough for the overview and the bell: waiting for a GPU (and since when), training, or done
+  const training = {
+    status: job.status,
+    queuedAt: job.createdAt,
+    startedAt: job.startedAt || null,
+    completedAt: job.completedAt || null,
+    ...(job.status === 'queued' ? { noGpuAvailable: (await gpuWait()).noGpuAvailable } : {}),
+  };
   if (job.status === 'completed' && !progress.completedSteps.includes('train')) {
     const updated = await markStep(progress, 'train');
-    return { progress: updated, training: { status: job.status } };
+    return { progress: updated, training };
   }
-  return { progress, training: { status: job.status } };
+  return { progress, training };
 }
 
 async function markStep(progress, step) {
