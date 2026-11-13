@@ -391,7 +391,25 @@ async function respondIfTrainingBusy(res, company) {
       trainingQueue.getWaiting(),
       trainingQueue.getDelayed()
     ]);
-    const busy = [...active, ...waiting, ...delayed].filter((j) => j?.data?.company === company);
+    let busy = [...active, ...waiting, ...delayed].filter((j) => j?.data?.company === company);
+    // A run cancelled (or ended) while it waited can still sit in the queue: it no longer counts, and
+    // a waiting one is taken out so it doesn't keep a GPU server starting for nothing
+    if (busy.length > 0) {
+      const ended = new Set(
+        (
+          await TrainingJob.find({
+            jobId: { $in: busy.map((j) => j?.data?.jobId).filter(Boolean) },
+            status: { $in: ['cancelled', 'failed', 'completed'] },
+          })
+            .select('jobId')
+            .lean()
+        ).map((t) => t.jobId)
+      );
+      for (const j of busy) {
+        if (ended.has(j?.data?.jobId) && !active.includes(j)) await j.remove().catch(() => undefined);
+      }
+      busy = busy.filter((j) => !ended.has(j?.data?.jobId));
+    }
     if (busy.length > 0) {
       const existingJobId = busy[0]?.data?.jobId || null;
       res.status(409).json({
@@ -960,6 +978,15 @@ const cancelTraining = async (req, res) => {
     trainingJob.status = 'cancelled';
     trainingJob.cancelledAt = new Date();
     await trainingJob.save();
+
+    // Still waiting for a GPU: take it out of the queue too, or a new run can't start and the GPU
+    // server would keep being started for a run nobody wants
+    try {
+      const waiting = [...(await trainingQueue.getWaiting()), ...(await trainingQueue.getDelayed())];
+      for (const job of waiting.filter((j) => j?.data?.jobId === jobId)) await job.remove();
+    } catch (err) {
+      console.warn('[training] Could not take the cancelled run out of the queue:', err.message);
+    }
 
     return res.status(200).json({
       jobId: trainingJob.jobId,
