@@ -18,7 +18,7 @@ const {
   normalizePolygonPoints,
   bboxToPolygon
 } = require('../utils/yoloConverter');
-const { splitDataset } = require('../utils/splitDataset');
+const { splitDatasetByGroup } = require('../utils/splitDataset');
 const { isGsnUser, countPendingTrainings } = require('../middleware/customerAccessMiddleware');
 const { COPY_NAME, removeCopies } = require('../services/datasetCopies');
 
@@ -427,6 +427,13 @@ const getDatasetImages = async (req, res) => {
       return String(a._id).localeCompare(String(b._id));
     });
 
+    // The name the photo was uploaded with (stored names are ids); extra copies read "<photo>_copy2"
+    const uploadedName = new Map(
+      (dataset.files || [])
+        .filter((f) => f.type === 'image' && f.storedName && f.originalName)
+        .map((f) => [String(f.storedName).toLowerCase(), f.originalName])
+    );
+
     // Format response with signed URLs
     const formatted = await Promise.all(
       uniqueImages.map(async (img) => {
@@ -450,6 +457,7 @@ const getDatasetImages = async (req, res) => {
         return {
           id: img._id,
           filename: img.filename,
+          originalName: uploadedName.get(String(img.filename || '').toLowerCase()) || null,
           url: imageUrl,
           thumbnailUrl,
           folder: img.folder,
@@ -1395,7 +1403,14 @@ const convertAnnotationsToYOLO = async (req, res) => {
         storedPath: img.storedPath,
         imageDoc: img,
       }));
-      const { train: trainList, val: valList, test: testList } = splitDataset(pool, dataset);
+      // Photos with a defect and good photos are split separately, so the held-out test and the
+      // validation set get both kinds (otherwise a few good photos can all land in training)
+      const withBoxes = new Set(
+        (await Annotation.distinct('imageId', { imageId: { $in: pool.map((item) => item.imageDoc._id) } })).map(String)
+      );
+      const { train: trainList, val: valList, test: testList } = splitDatasetByGroup(pool, dataset, (item) =>
+        withBoxes.has(String(item.imageDoc._id)) ? 'defect' : 'good'
+      );
 
       const imagesTrainPath = path.join(datasetPath, 'images', 'train');
       const imagesValPath = path.join(datasetPath, 'images', 'val');

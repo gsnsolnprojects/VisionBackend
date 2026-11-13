@@ -2,6 +2,8 @@ const TrainingJob = require('../models/TrainingJob');
 const InferenceJob = require('../models/InferenceJob');
 const Dataset = require('../models/Dataset');
 const UsageCarryover = require('../models/UsageCarryover');
+const UsageRecord = require('../models/UsageRecord');
+const AuditLog = require('../models/AuditLog');
 
 /**
  * Plan usage counts for a company, used by the monthly allowances (Playground: 5 training
@@ -80,6 +82,52 @@ async function keepDeletedUsage({ trainingJobs = [], inferenceJobs = [] }) {
 }
 
 /**
+ * Call before deleting training or inference jobs, with the whole job documents: keeps a copy in
+ * UsageRecord so Settings -> Usage still lists them (marked deleted), with who started them.
+ * @param {{ trainingJobs?: object[], inferenceJobs?: object[] }} jobs
+ */
+async function keepUsageHistory({ trainingJobs = [], inferenceJobs = [] }) {
+  const rows = [
+    ...trainingJobs.map((job) => ({ kind: 'training', refId: job.jobId, job })),
+    ...inferenceJobs
+      .filter((job) => !['live_camera', 'live'].includes(job.sourceType))
+      .map((job) => ({ kind: 'inference', refId: job.inferenceId, job })),
+  ].filter((r) => r.refId && r.job.company);
+  if (!rows.length) return;
+
+  const audits = await AuditLog.find({ resourceId: { $in: rows.map((r) => r.refId) }, action: { $in: ['execute', 'create'] } })
+    .select('resourceId userId')
+    .sort({ timestamp: 1 })
+    .lean();
+  const starter = new Map();
+  for (const a of audits) if (!starter.has(a.resourceId)) starter.set(a.resourceId, a.userId);
+
+  const deletedAt = new Date();
+  await UsageRecord.bulkWrite(
+    rows.map(({ kind, refId, job }) => {
+      // Only what Usage shows: not the results, which can be large
+      const { results, logs, metrics, ...data } = job;
+      return {
+        updateOne: {
+          filter: { kind, refId },
+          update: {
+            $set: {
+              company: job.company,
+              project: job.project || null,
+              userId: starter.get(refId) || (job.createdBy ? String(job.createdBy) : null),
+              at: job.createdAt || deletedAt,
+              data: { ...data, progress: job.progress ? { totalImages: job.progress.totalImages } : undefined },
+              deletedAt,
+            },
+          },
+          upsert: true,
+        },
+      };
+    })
+  );
+}
+
+/**
  * The company's own datasets. Not counted: GSN sample links, samples it labels itself, and
  * augmented versions (extra training photos made from one of its datasets).
  */
@@ -105,6 +153,7 @@ module.exports = {
   startOfMonthIST,
   monthKeyIST,
   keepDeletedUsage,
+  keepUsageHistory,
   countTrainingRunsThisMonth,
   countPredictionsThisMonth,
   countStoredImages,

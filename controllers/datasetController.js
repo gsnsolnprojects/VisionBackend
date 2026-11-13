@@ -4,6 +4,7 @@ const fsPromises = require('fs').promises;
 const path = require('path');
 const mongoose = require('mongoose');
 const Dataset = require('../models/Dataset');
+const UsageRecord = require('../models/UsageRecord');
 const Category = require('../models/Category');
 const Annotation = require('../models/Annotation');
 const Image = require('../models/Image');
@@ -2608,6 +2609,20 @@ const startAugmentation = async (req, res) => {
     dataset.augmentationStatus = 'running';
     await dataset.save();
 
+    // Customers' extra photos join their own dataset, so there's no new dataset for Settings -> Usage
+    // to list: the run is recorded here and the worker records its end
+    if (jobPayload.intoSameDataset) {
+      await UsageRecord.create({
+        kind: 'more-photos',
+        refId: String(job.id),
+        company: dataset.company,
+        project: dataset.project,
+        userId: req.user?.id || null,
+        at: new Date(),
+        data: { status: 'running', version: dataset.version, target: targetTrainTotal },
+      }).catch((err) => console.warn('[AUGMENTATION] Could not record extra photos in Usage:', err.message));
+    }
+
     // Who asked for the extra photos (Settings -> Usage); keyed by the source dataset
     await auditService.logAction({
       action: 'execute',
@@ -3748,12 +3763,15 @@ const getFileLabels = async (req, res) => {
     for (const img of images) {
       const labelFile =
         labelFiles.get(baseOf(img.storedName)) || labelFiles.get(`${img.folder}::${baseOf(img.originalName)}`);
-      if (!labelFile) {
+      // Extra copies, and photos labelled in the app, have their label file next to them on disk but
+      // not in the file list. A good photo's file is empty: its right answer is "nothing".
+      const labelPath = labelFile?.storedPath || (img.storedPath && getLabelFilePath(img.storedPath));
+      if (!labelFile && !(labelPath && (await storageAdapter.exists(path.join(dataset.storagePath, labelPath))))) {
         needInApp.push(img);
         continue;
       }
       try {
-        const text = String(await storageAdapter.readFile(path.join(dataset.storagePath, labelFile.storedPath)));
+        const text = String(await storageAdapter.readFile(path.join(dataset.storagePath, labelPath)));
         labels[String(img._id)] = text
           .split(/\r?\n/)
           .map((line) => line.trim().split(/\s+/).map(Number))

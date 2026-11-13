@@ -3,6 +3,7 @@ const InferenceJob = require('../models/InferenceJob');
 const Dataset = require('../models/Dataset');
 const AuditLog = require('../models/AuditLog');
 const GpuServerSession = require('../models/GpuServerSession');
+const UsageRecord = require('../models/UsageRecord');
 const { canAccessAllWorkspaces } = require('../utils/workspaceScoping');
 const { getSupabaseClient } = require('../services/supabaseService');
 
@@ -55,7 +56,7 @@ const getActivity = async (req, res) => {
     const byCompany = company === 'all' ? {} : { company };
     const inMonth = { createdAt: { $gte: start, $lt: end } };
 
-    const [trainings, tests, augmented, uploads] = await Promise.all([
+    const [trainings, tests, augmented, uploads, records] = await Promise.all([
       TrainingJob.find({ ...byCompany, ...inMonth })
         .select('jobId company project modelType modelSize status device createdAt startedAt completedAt cancelledAt updatedAt')
         .lean(),
@@ -66,9 +67,24 @@ const getActivity = async (req, res) => {
         .select('company project version status totalImages parentDatasetId createdAt updatedAt')
         .lean(),
       Dataset.find({ ...byCompany, ...inMonth, isAugmented: { $ne: true }, linkedFrom: null })
-        .select('company project version status totalImages labelledSampleOf createdAt updatedAt')
+        .select('company project version status totalImages labelledSampleOf createdAt updatedAt deletedAt')
         .lean(),
+      // Kept copies of deleted trainings and tests, and customers' extra photos (models/UsageRecord)
+      UsageRecord.find({ ...byCompany, at: { $gte: start, $lt: end } }).lean(),
     ]);
+
+    // A kept copy counts only when the job itself is gone
+    const liveTrainings = new Set(trainings.map((t) => t.jobId));
+    const liveTests = new Set(tests.map((t) => t.inferenceId));
+    const deletedIds = new Set();
+    const keptStarter = new Map();
+    for (const r of records) {
+      if (r.kind === 'training' && !liveTrainings.has(r.refId)) trainings.push({ ...r.data, jobId: r.refId });
+      else if (r.kind === 'inference' && !liveTests.has(r.refId)) tests.push({ ...r.data, inferenceId: r.refId });
+      else continue;
+      if (r.deletedAt) deletedIds.add(r.refId);
+      if (r.userId) keptStarter.set(r.refId, r.userId);
+    }
 
     // Who started each: the audit log has the user for every training, test and dataset
     const ids = [
@@ -87,6 +103,9 @@ const getActivity = async (req, res) => {
     const augmenter = new Map(audits.filter(isAugment).map((a) => [a.resourceId, a.userId]));
     augmented.forEach((d) => augmenter.has(String(d.parentDatasetId)) && starter.set(String(d._id), augmenter.get(String(d.parentDatasetId))));
     tests.forEach((t) => !starter.has(t.inferenceId) && t.createdBy && starter.set(t.inferenceId, t.createdBy));
+    keptStarter.forEach((userId, id) => !starter.has(id) && starter.set(id, userId));
+    const morePhotos = records.filter((r) => r.kind === 'more-photos');
+    morePhotos.forEach((r) => r.userId && starter.set(`more:${r.refId}`, r.userId));
     const people = await loadPeople([...starter.values()]);
     const personOf = (id) => {
       const userId = starter.get(id) || null;
@@ -111,6 +130,7 @@ const getActivity = async (req, res) => {
         minutes: round1(minutesBetween(t.startedAt, ended)),
         waitMinutes: round1(minutesBetween(t.createdAt, t.startedAt)),
         status: t.status,
+        deleted: deletedIds.has(t.jobId),
       });
     }
     for (const t of tests) {
@@ -128,6 +148,7 @@ const getActivity = async (req, res) => {
         endedAt: ended || null,
         minutes: round1(minutesBetween(t.startedAt || t.createdAt, ended)),
         status: t.status,
+        deleted: deletedIds.has(t.inferenceId),
         photos: t.progress?.totalImages || 0,
       });
     }
@@ -146,6 +167,23 @@ const getActivity = async (req, res) => {
         status: d.status,
       });
     }
+    for (const r of morePhotos) {
+      const running = r.data?.status === 'running';
+      sessions.push({
+        type: 'more-photos',
+        id: `more:${r.refId}`,
+        company: r.company,
+        project: r.project,
+        person: personOf(`more:${r.refId}`),
+        detail: `${r.data?.version || 'dataset'} · ${r.data?.totalImages ?? r.data?.target ?? 0} photos`,
+        device: 'cpu',
+        startedAt: r.at,
+        endedAt: running ? null : r.data?.endedAt || null,
+        minutes: running ? null : round1(minutesBetween(r.at, r.data?.endedAt)),
+        status: r.data?.status || 'running',
+        deleted: !!r.deletedAt,
+      });
+    }
     for (const d of uploads) {
       sessions.push({
         type: d.labelledSampleOf ? 'sample-to-label' : 'upload',
@@ -158,7 +196,9 @@ const getActivity = async (req, res) => {
         startedAt: d.createdAt,
         endedAt: null,
         minutes: null,
-        status: d.status,
+        // A deleted dataset is marked failed; Usage says deleted
+        status: d.deletedAt ? 'deleted' : d.status,
+        deleted: !!d.deletedAt,
       });
     }
     sessions.sort((a, b) => new Date(b.startedAt || b.queuedAt) - new Date(a.startedAt || a.queuedAt));

@@ -258,7 +258,15 @@ const labelSampleYourself = async (req, res) => {
 
     const images = source.files.filter((f) => f.type === 'image' && f.storedPath);
     const originals = images.filter((f) => !AUGMENTED_COPY.test(f.storedName || f.storedPath));
-    const photos = originals.length > 0 ? originals : images;
+    // Some samples list a photo in two sets (e.g. train and test): copy each photo once, or the
+    // project would count photos the labelling tool can't show
+    const seen = new Set();
+    const photos = (originals.length > 0 ? originals : images).filter((f) => {
+      const name = path.basename(f.storedName || f.storedPath).toLowerCase();
+      if (seen.has(name)) return false;
+      seen.add(name);
+      return true;
+    });
     if (photos.length === 0) return res.status(400).json({ error: 'No photos', message: 'This sample has no photos' });
 
     const version = await uniqueName(`${toSafeName(item.name, 'sample')}-my-labels`, async (name) =>

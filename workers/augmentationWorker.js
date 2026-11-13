@@ -14,6 +14,7 @@ const { augmentationQueue } = require('../queue');
 const Dataset = require('../models/Dataset');
 const Image = require('../models/Image');
 const Category = require('../models/Category');
+const UsageRecord = require('../models/UsageRecord');
 const storageAdapter = require('../services/storageAdapter');
 const { splitDatasetByGroup, splitShares } = require('../utils/splitDataset');
 const { isCopyName, photoOfCopy, removeCopies } = require('../services/datasetCopies');
@@ -389,6 +390,15 @@ async function addCopiesToDataset(dataset, jobId, total) {
   await dataset.save();
 }
 
+/** Settings -> Usage: the end of a customer's set of extra photos (recorded when it started) */
+async function endMorePhotosRecord(jobId, status, totalImages) {
+  const set = { 'data.status': status, 'data.endedAt': new Date() };
+  if (typeof totalImages === 'number') set['data.totalImages'] = totalImages;
+  await UsageRecord.updateOne({ kind: 'more-photos', refId: String(jobId) }, { $set: set }).catch((err) =>
+    console.warn('[AUGMENT-WORKER] Could not record the end of extra photos in Usage:', err.message),
+  );
+}
+
 const processAugmentationJob = async (job) => {
   const {
     datasetId,
@@ -470,6 +480,7 @@ const processAugmentationJob = async (job) => {
     if (intoSameDataset) {
       await addCopiesToDataset(originalDataset, job.id, targetTrainTotal);
       activeAugmentations.delete(job.id);
+      await endMorePhotosRecord(job.id, 'succeeded', originalDataset.totalImages);
       return { augmentedDatasetId: originalDataset._id.toString() };
     }
 
@@ -1243,6 +1254,7 @@ const processAugmentationJob = async (job) => {
             await augmentedDataset.save();
           }
 
+          if (intoSameDataset) await endMorePhotosRecord(job.id, 'failed');
           if (originalDataset) {
             // Do not touch original status for duplicate jobs; for real failures we
             // mark the augmentation as failed with the error message.

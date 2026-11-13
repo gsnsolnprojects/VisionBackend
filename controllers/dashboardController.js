@@ -11,7 +11,8 @@ const auditService = require('../services/auditService');
 const path = require('path');
 const { deleteProjectRow } = require('../services/supabaseService');
 const { removeLibraryEntriesForDatasets } = require('../services/sampleLibraryService');
-const { countStoredImages, countTrainingRunsThisMonth, countPredictionsThisMonth, keepDeletedUsage } = require('../utils/usage');
+const { countStoredImages, countTrainingRunsThisMonth, countPredictionsThisMonth, keepDeletedUsage, keepUsageHistory } = require('../utils/usage');
+const UsageRecord = require('../models/UsageRecord');
 const { getPathProgress } = require('../services/playgroundProgressService');
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -472,10 +473,11 @@ const deleteProject = async (req, res) => {
       }
     }
     // Deleting the project doesn't give its training runs or predictions back to the monthly allowance
-    await keepDeletedUsage({
-      inferenceJobs,
-      trainingJobs: await TrainingJob.find(filter).select('company createdAt status').lean(),
-    });
+    const trainingJobs = await TrainingJob.find(filter).select('-logs -metrics').lean();
+    await keepDeletedUsage({ inferenceJobs, trainingJobs });
+    // Settings -> Usage keeps listing them, marked deleted
+    await keepUsageHistory({ inferenceJobs, trainingJobs });
+    await UsageRecord.updateMany({ ...filter, kind: 'more-photos', deletedAt: null }, { $set: { deletedAt: new Date() } });
     const inferenceResult = await InferenceJob.deleteMany(filter);
     deleted.inferenceJobs = inferenceResult.deletedCount || 0;
 
