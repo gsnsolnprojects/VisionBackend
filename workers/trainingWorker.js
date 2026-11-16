@@ -22,10 +22,13 @@ const Bull = require('bull');
 const { BlobServiceClient } = require('@azure/storage-blob');
 const os = require('os');
 const GpuServerSession = require('../models/GpuServerSession');
+const { getGpuPlacement } = require('../utils/gpuPlacement');
 
 // Docker's --gpus flag sets NVIDIA_VISIBLE_DEVICES: this worker runs on the GPU server
 const ON_GPU_SERVER = !!process.env.NVIDIA_VISIBLE_DEVICES;
 let gpuSessionId = null;
+// Region / zone of this GPU server (null off EC2), noted on its on-time record and on each training
+let gpuPlacement = null;
 
 // Same Redis settings as the API's queues: TLS only for Azure Redis (host + password) or REDIS_TLS,
 // so the plain "redis" container on the server works too
@@ -727,6 +730,11 @@ const processTrainingJob = async (job) => {
     trainingJob.status = 'running';
     trainingJob.startedAt = new Date();
     trainingJob.device = ON_GPU_SERVER ? 'gpu' : 'cpu';
+    if (ON_GPU_SERVER) {
+      trainingJob.gpuRegion = gpuPlacement?.region || null;
+      trainingJob.gpuZone = gpuPlacement?.zone || null;
+      trainingJob.gpuSessionId = gpuSessionId;
+    }
     trainingJob.progress.totalEpochs = hyperparameters.epochs || 0;
     trainingJob.progress.currentEpoch = 0;
     trainingJob.progress.progressPercent = 0;
@@ -1505,10 +1513,15 @@ const startWorker = async () => {
     if (ON_GPU_SERVER) {
       const host = os.hostname();
       const bootedAt = new Date(Date.now() - os.uptime() * 1000);
+      gpuPlacement = await getGpuPlacement();
+      const placement = gpuPlacement
+        ? { region: gpuPlacement.region, zone: gpuPlacement.zone, instanceType: gpuPlacement.instanceType, instanceId: gpuPlacement.instanceId }
+        : {};
+      if (gpuPlacement) console.log(`[GPU-SESSION] running in ${gpuPlacement.zone} (${gpuPlacement.instanceType}, ${gpuPlacement.instanceId})`);
       // A restart of the worker on the same boot reuses that boot's record
       const session = await GpuServerSession.findOneAndUpdate(
         { host, startedAt: { $gte: new Date(bootedAt.getTime() - 60000), $lte: new Date(bootedAt.getTime() + 60000) } },
-        { $setOnInsert: { host, startedAt: bootedAt }, $set: { stoppedAt: null } },
+        { $setOnInsert: { host, startedAt: bootedAt }, $set: { stoppedAt: null, ...placement } },
         { upsert: true, new: true }
       ).catch((e) => console.warn('[GPU-SESSION] could not record:', e.message));
       gpuSessionId = session?._id || null;

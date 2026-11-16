@@ -51,3 +51,6 @@ __pycache__/
 # Documentation files (markdown)
 *.md
 !README.md
+
+# GPU dispatch / availability logs written by the server timers
+gpu-tracking/

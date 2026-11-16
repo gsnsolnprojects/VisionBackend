@@ -33,6 +33,7 @@ const {
   savePublishSelection,
   setProjectPublish,
 } = require('../controllers/adminPublishController');
+const { getGpuUsage } = require('../controllers/adminGpuController');
 
 /**
  * Superadmin Routes (GSN platform admin only)
@@ -47,6 +48,7 @@ const {
  * GET    /api/admin/revenue
  * GET    /api/admin/jobs
  * GET    /api/admin/audit
+ * GET    /api/admin/gpu                   (GPU server: zones, on-time, availability)
  * GET    /api/admin/sample-library
  * POST   /api/admin/sample-library
  * POST   /api/admin/sample-library/add-all
@@ -70,6 +72,7 @@ router.post('/companies/:companyId/reset', resetCompany);
 router.get('/revenue', getRevenue);
 router.get('/jobs', listJobs);
 router.get('/audit', listAudit);
+router.get('/gpu', getGpuUsage);
 
 // Playground sample dataset library
 router.get('/sample-library', listLibrary);

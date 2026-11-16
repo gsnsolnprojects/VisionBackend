@@ -240,7 +240,12 @@ const trainingJobSchema = new mongoose.Schema({
     type: String,
     enum: ['gpu', 'cpu', null],
     default: null
-  }
+  },
+
+  // Which GPU server ran it (superadmin GPU tab): AWS region and zone, and that server's on-time record
+  gpuRegion: { type: String, default: null },
+  gpuZone: { type: String, default: null },
+  gpuSessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'GpuServerSession', default: null, index: true }
 }, {
   timestamps: true // Automatically adds createdAt and updatedAt
 });

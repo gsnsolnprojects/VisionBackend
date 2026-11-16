@@ -10,6 +10,11 @@ const gpuServerSessionSchema = new mongoose.Schema(
     host: { type: String, required: true },
     startedAt: { type: Date, required: true, index: true },
     stoppedAt: { type: Date, default: null },
+    // Where AWS gave us the GPU (from instance metadata); empty on records from before 16 Nov 2026
+    region: { type: String, default: null },
+    zone: { type: String, default: null },
+    instanceType: { type: String, default: null },
+    instanceId: { type: String, default: null },
   },
   { timestamps: true }
 );
