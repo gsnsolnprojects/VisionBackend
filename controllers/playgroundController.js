@@ -43,7 +43,7 @@ const {
  * POST   /api/playground/level1/test            { datasetId, fileIds } GSN's model on the sample's held-out photos
  * GET    /api/playground/levels                 the student's levels, latest first
  * POST   /api/playground/levels/start           { level, mission, industry, sample, projectId }
- * POST   /api/playground/levels/progress        { mission, step, practiceScore, cleanPhotos, trainingJobId, skipped }
+ * POST   /api/playground/levels/progress        { mission, step, practiceScore, cleanPhotos, practicePhotos, practiceTotal, trainingJobId, skipped }
  * GET    /api/playground/badges                 the student's badges, with any newly earned saved
  * POST   /api/playground/badges/seen            { ids } their award cards have been shown
  */

@@ -95,6 +95,8 @@ const toJson = ({ progress: p, training }) => ({
   nextStep: nextStep(p.level, p.completedSteps),
   practiceScore: p.practiceScore,
   cleanPhotos: p.cleanPhotos || 0,
+  practicePhotos: p.practicePhotos || 0,
+  practiceTotal: p.practiceTotal ?? null,
   trainingJobId: p.trainingJobId,
   training,
   finishedAt: p.finishedAt,
@@ -146,7 +148,7 @@ async function startLevel(user, { level, mission, industry, sample, projectId })
  * Saves what happened in a mission. A project opened outside the levels has no progress row, and a
  * step from another level (both levels share the project page) is ignored: both are normal.
  */
-async function saveProgress(user, { mission, step, practiceScore, cleanPhotos, trainingJobId, skipped }) {
+async function saveProgress(user, { mission, step, practiceScore, cleanPhotos, practicePhotos, practiceTotal, trainingJobId, skipped }) {
   const missionName = currentMission(shortText(mission, 120));
   if (!missionName) return null;
   await moveRenamedMissions(user);
@@ -160,13 +162,19 @@ async function saveProgress(user, { mission, step, practiceScore, cleanPhotos, t
   if (Number.isInteger(cleanPhotos) && cleanPhotos >= 0 && cleanPhotos <= 100) {
     update.$max = { ...update.$max, cleanPhotos };
   }
+  if (Number.isInteger(practicePhotos) && practicePhotos >= 0 && practicePhotos <= 100) {
+    update.$max = { ...update.$max, practicePhotos };
+  }
+  if (Number.isInteger(practiceTotal) && practiceTotal >= 1 && practiceTotal <= 100) {
+    update.$set = { ...update.$set, practiceTotal };
+  }
   if (skipped === true && LEVEL_STEPS[progress.level].includes(step)) {
     update.$addToSet = { skippedSteps: step };
   }
   const jobId = shortText(trainingJobId, 100);
   if (jobId && (await TrainingJob.exists({ jobId, company: user.company }))) {
     // A new run starts the step over until it finishes
-    update.$set = { trainingJobId: jobId };
+    update.$set = { ...update.$set, trainingJobId: jobId };
     update.$pull = { completedSteps: 'train' };
   }
   if (Object.keys(update).length) {

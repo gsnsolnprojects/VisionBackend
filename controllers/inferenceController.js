@@ -23,6 +23,31 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const { spawn } = require('child_process');
 
+/**
+ * A photo's detections as boxes in 0-1 units of the photo ({ name, conf, x, y, w, h }, x/y the top-left
+ * corner), from the run's pixel boxes; empty when the photo's size wasn't recorded
+ */
+function boxesOf(img) {
+  const W = Number(img.imageWidth);
+  const H = Number(img.imageHeight);
+  if (!(W > 0 && H > 0) || !Array.isArray(img.detections)) return undefined;
+  return img.detections
+    .filter((d) => Array.isArray(d.bbox) && d.bbox.length === 4)
+    .slice(0, 300)
+    .map((d) => {
+      const [x1, y1, x2, y2] = d.bbox.map(Number);
+      const round = (v) => Math.round(Math.min(1, Math.max(0, v)) * 10000) / 10000;
+      return {
+        name: d.class || null,
+        conf: Math.round(Number(d.confidence || 0) * 1000) / 1000,
+        x: round(x1 / W),
+        y: round(y1 / H),
+        w: round((x2 - x1) / W),
+        h: round((y2 - y1) / H),
+      };
+    });
+}
+
 // ✅ Store long-lived Python processes for live camera inference
 // Key: inferenceId, Value: { process, modelPath, defaultConf, model, inferenceJob }
 const liveInferenceProcesses = new Map();
@@ -1214,6 +1239,9 @@ const getInferenceResults = async (req, res) => {
         instanceCount: img.instanceCount ?? img.detectionCount,
         // the photo's own name when the run used a shortened one (img_00000_ab12cd34.jpg)
         originalName: img.originalName || undefined,
+        // Where the model put each box, as a share (0-1) of the photo, so the web app can draw
+        // its own boxes and compare them with the photo's labels. Only when the size is known.
+        boxes: boxesOf(img),
       };
       imageStatsByName[name] = stats;
       imageStatsByName[basename(name)] = stats;

@@ -24,6 +24,9 @@ const playgroundLevelProgressSchema = new mongoose.Schema(
     practiceScore: { type: Number, default: null },
     /** Most practice photos labelled well without a hint, in one go */
     cleanPhotos: { type: Number, default: 0 },
+    /** Most practice photos labelled (checked) in one go, and how many practice photos there were */
+    practicePhotos: { type: Number, default: 0 },
+    practiceTotal: { type: Number, default: null },
     /** The latest training run, so its result shows on resume even if the browser was closed */
     trainingJobId: { type: String, default: null },
     finishedAt: { type: Date, default: null },

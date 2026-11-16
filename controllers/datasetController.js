@@ -3817,6 +3817,7 @@ const getFileLabels = async (req, res) => {
 };
 
 module.exports = {
+  collectLabelBaseKeys,
   uploadDataset,
   getFileLabels,
   listDatasets,

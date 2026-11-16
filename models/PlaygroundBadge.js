@@ -14,6 +14,10 @@ const playgroundBadgeSchema = new mongoose.Schema(
     mission: { type: String, default: null },
     /** What earned it, for example "82% match" */
     detail: { type: String, default: null },
+    /** Bronze, silver or gold, for a badge that has levels; it only ever goes up */
+    tier: { type: String, enum: ['bronze', 'silver', 'gold', null], default: null },
+    /** The tier before the latest upgrade, so the award card can say "upgraded" */
+    upgradedFrom: { type: String, enum: ['bronze', 'silver', 'gold', null], default: null },
     /** When the student was shown it; null means its award card is still to come */
     seenAt: { type: Date, default: null },
   },
