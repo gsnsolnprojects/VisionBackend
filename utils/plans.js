@@ -7,6 +7,7 @@
  * Limits: null = no limit.
  *  - ownDatasets: datasets the company uploads itself (GSN sample links don't count)
  *  - imagesPerDataset / maxImageSizeMB: per uploaded dataset and per image file
+ *  - minImageSizeKB / minImageSide / maxImageSide: per image file (utils/imageRules); missing = no rule
  *  - trainingRunsPerMonth / predictionsPerMonth: reset each calendar month (India time),
  *    failed or cancelled runs don't count; predictions count images, not batches
  */
@@ -25,6 +26,10 @@ const PLANS = {
       ownDatasets: 1,
       imagesPerDataset: 500,
       maxImageSizeMB: 5,
+      // Each photo: at least 10 KB, at least 320 px on its shorter side, at most 8000 px on its longer side
+      minImageSizeKB: 10,
+      minImageSide: 320,
+      maxImageSide: 8000,
       trainingRunsPerMonth: 5,
       predictionsPerMonth: 1000,
     },

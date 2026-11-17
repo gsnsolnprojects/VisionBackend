@@ -1,4 +1,5 @@
 const express = require('express');
+const { enforceImageRules } = require('../utils/imageRules');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
@@ -85,7 +86,8 @@ router.get('/datasets', authenticateToken, requirePermission('viewDatasets'), li
 router.get('/history', authenticateToken, requirePermission('viewInferenceResults'), listInferenceJobs);
 
 // POST /api/inference/start - Start batch inference (images/videos)
-router.post('/start', authenticateToken, requirePermission('runInference'), uploadInferenceImages.array('files', 1000), startBatchInference);
+// Uploaded test photos follow the plan's size rules (utils/imageRules)
+router.post('/start', authenticateToken, requirePermission('runInference'), uploadInferenceImages.array('files', 1000), enforceImageRules, startBatchInference);
 
 // POST /api/inference/live/start - Start live camera inference
 router.post('/live/start', authenticateToken, requirePermission('runInference'), startLiveInference);
