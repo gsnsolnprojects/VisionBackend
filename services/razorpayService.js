@@ -209,7 +209,7 @@ async function applyRazorpaySubscription(rzpSub) {
   // Nor let an old or abandoned subscription end a plan the superadmin gave for free
   const freeGrant = current && !current.razorpay_subscription_id && current.status === 'active';
   if (freeGrant && status !== 'active') {
-    return { applied: false, reason: 'company has free access from the superadmin' };
+    return { applied: false, reason: 'organisation has free access from the superadmin' };
   }
 
   const update = {

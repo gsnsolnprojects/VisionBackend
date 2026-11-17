@@ -14,6 +14,7 @@ const { inferenceQueue } = require('../queue');
 const { resolveModelCheckpointPath } = require('../services/resolveModelCheckpoint');
 const { SAMPLE_COMPANY } = require('../services/sampleLibraryService');
 const { canAccessAllWorkspaces } = require('../utils/workspaceScoping');
+const { getSupabaseClient } = require('../services/supabaseService');
 const { markPracticeDone } = require('../services/playgroundProgressService');
 const { listLevels, startLevel, saveProgress } = require('../services/playgroundLevelService');
 const { syncBadges, markBadgesSeen } = require('../services/playgroundBadgeService');
@@ -102,12 +103,22 @@ const createReport = async (req, res) => {
     const { projectId, title, industry, labelled, names } = req.body || {};
     const model = job.modelId ? await Model.findById(job.modelId).select('modelVersion').lean() : null;
     const reportTitle = String(title || job.project).slice(0, 120);
+    // Who made the report, for its Details: the name from their profile, or just their email
+    let preparedByName = null;
+    try {
+      const { data } = await getSupabaseClient().from('profiles').select('name').eq('id', req.user.id).maybeSingle();
+      preparedByName = typeof data?.name === 'string' && data.name.trim() ? data.name.trim().slice(0, 80) : null;
+    } catch (err) {
+      console.warn('[playground] report: could not read the name of the user:', err.message);
+    }
     const annexureToken = crypto.randomBytes(24).toString('hex');
     const expiresAt = new Date(Date.now() + PLAYGROUND_REPORT_LIFETIME_MS);
     const written = await writeReport(job, {
       title: reportTitle,
       industry: industry ? String(industry).slice(0, 80) : null,
       modelName: model?.modelVersion || null,
+      organisation: req.user.company || job.company || null,
+      preparedBy: { name: preparedByName, email: req.user.email || null },
       labelled: labelled && typeof labelled === 'object' ? labelled : undefined,
       names: names && typeof names === 'object' ? names : undefined,
       annexureUrl: `${publicApiUrl(req)}/api/playground/annexure/${annexureToken}`,
@@ -304,7 +315,7 @@ const startSampleRun = async (req, res, { purpose, project, tooMany, fileName })
       return res.status(400).json({ error: 'Dataset not found', message: 'This dataset was not found.' });
     }
     const company = req.user?.company;
-    if (!company) return res.status(400).json({ error: 'No company', message: 'Create or join a company first.' });
+    if (!company) return res.status(400).json({ error: 'No organisation', message: 'Create or join an organisation first.' });
     const dataset = await Dataset.findById(datasetId);
     if (!dataset || dataset.deletedAt) {
       return res.status(404).json({ error: 'Dataset not found', message: 'This dataset was not found.' });
@@ -492,7 +503,7 @@ const getPracticeAutoLabel = async (req, res) => {
 /** Learn to label finished: saved for the company's challenge path */
 const practiceDone = async (req, res) => {
   try {
-    if (!req.user?.company) return res.status(400).json({ error: 'No company', message: 'Create or join a company first.' });
+    if (!req.user?.company) return res.status(400).json({ error: 'No organisation', message: 'Create or join an organisation first.' });
     res.json({ path: await markPracticeDone(req.user.company) });
   } catch (error) {
     console.error('[playground] practice done failed:', error);
@@ -513,7 +524,7 @@ const getLevels = async (req, res) => {
 
 const postLevelStart = async (req, res) => {
   try {
-    if (!req.user?.company) return res.status(400).json({ error: 'No company', message: 'Create or join a company first.' });
+    if (!req.user?.company) return res.status(400).json({ error: 'No organisation', message: 'Create or join an organisation first.' });
     const level = await startLevel(req.user, req.body || {});
     if (!level) return res.status(400).json({ error: 'Bad level', message: 'This level could not be started.' });
     res.json({ level });
@@ -525,7 +536,7 @@ const postLevelStart = async (req, res) => {
 
 const postLevelProgress = async (req, res) => {
   try {
-    if (!req.user?.company) return res.status(400).json({ error: 'No company', message: 'Create or join a company first.' });
+    if (!req.user?.company) return res.status(400).json({ error: 'No organisation', message: 'Create or join an organisation first.' });
     res.json({ level: await saveProgress(req.user, req.body || {}) });
   } catch (error) {
     console.error('[playground] level progress failed:', error);

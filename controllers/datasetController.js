@@ -2542,7 +2542,7 @@ const startAugmentation = async (req, res) => {
       const labelled = await countLabelledPhotos(dataset);
       if (labelled < CUSTOMER_MIN_LABELLED) {
         return res.status(400).json({
-          error: `Label at least ${CUSTOMER_MIN_LABELLED} photos first (${labelled} so far).`,
+          error: `Label more photos first (${labelled} labelled so far).`,
         });
       }
       // The target is the labelled photos plus their copies, in all

@@ -548,7 +548,7 @@ const startTraining = async (req, res) => {
       // Validate that model belongs to same company/project as the selected dataset
       if (trainedModel.company !== dataset.company || trainedModel.project !== dataset.project) {
         return res.status(400).json({
-          error: 'Trained model does not belong to the same company/project as the selected dataset'
+          error: 'Trained model does not belong to the same organisation/project as the selected dataset'
         });
       }
     } else {
@@ -673,7 +673,7 @@ const startTraining = async (req, res) => {
       if (duplicate) {
         return res.status(409).json({
           error:
-            'A model with this modelVersion already exists for this company and project. Choose a different name.',
+            'A model with this modelVersion already exists for this organisation and project. Choose a different name.',
           modelVersion: requestedModelVersion
         });
       }

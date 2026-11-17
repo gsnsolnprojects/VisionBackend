@@ -125,7 +125,7 @@ const putMobileInspectConfig = async (req, res) => {
 
     if (model.company !== company || model.project !== project) {
       return res.status(400).json({
-        error: 'Model does not belong to this company and project',
+        error: 'Model does not belong to this organisation and project',
         modelCompany: model.company,
         modelProject: model.project,
       });

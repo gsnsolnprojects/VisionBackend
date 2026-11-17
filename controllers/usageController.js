@@ -52,7 +52,7 @@ const getActivity = async (req, res) => {
     const isAdmin = canAccessAllWorkspaces(req.user);
     const { month, start, end } = monthRange(req.query.month);
     const company = isAdmin ? String(req.query.company || 'all') : req.user.company;
-    if (!company) return res.status(400).json({ error: 'No company', message: 'Create or join a company first.' });
+    if (!company) return res.status(400).json({ error: 'No organisation', message: 'Create or join an organisation first.' });
     const byCompany = company === 'all' ? {} : { company };
     const inMonth = { createdAt: { $gte: start, $lt: end } };
 

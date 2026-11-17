@@ -154,7 +154,7 @@ function pickSamples(photos, rows) {
  * Write the PDF report for a finished test: a summary, one photo for each kind of defect, and a link
  * to the Excel file with every photo.
  * @param {object} job InferenceJob (lean or document)
- * @param {{ title: string, industry?: string|null, modelName?: string|null, labelled?: Record<string, string[]>, annexureUrl?: string, expiresAt?: Date }} info
+ * @param {{ title: string, organisation?: string|null, preparedBy?: { name: string|null, email: string|null }, industry?: string|null, modelName?: string|null, labelled?: Record<string, string[]>, annexureUrl?: string, expiresAt?: Date }} info
  *   labelled: what the dataset labels say for held-out photos, by original file name
  *   annexureUrl: where the Excel file can be downloaded, until expiresAt
  * @returns {Promise<{ filePath: string, csvPath: string, excelPath: string, previewPath: string|null, sizeBytes: number, photos: number }>}
@@ -169,10 +169,14 @@ async function writeReport(job, info) {
   const filePath = path.join(dir, `${job.inferenceId}.pdf`);
 
   const headerH = 96;
+  // Room at the bottom of each page for the footer
+  const footerH = 58;
   const doc = new PDFDocument({
     size: 'A4',
-    margins: { top: headerH + 18, bottom: 40, left: 40, right: 40 },
+    margins: { top: headerH + 18, bottom: footerH, left: 40, right: 40 },
     info: { Title: `${info.title} – test report`, Author: 'GSN Solutions' },
+    // Kept until the end, so each footer can say "Page 1 of 3"
+    bufferPages: true,
   });
   const out = fs.createWriteStream(filePath);
   doc.pipe(out);
@@ -214,11 +218,18 @@ async function writeReport(job, info) {
   doc.y += 6;
 
   // Details
+  const testedAt = new Date(job.completedAt || job.createdAt || Date.now());
+  // Who made it: the name, with the email, or the email alone
+  const preparedBy = info.preparedBy?.name
+    ? `${info.preparedBy.name}${info.preparedBy.email ? ` (${info.preparedBy.email})` : ''}`
+    : info.preparedBy?.email || null;
   const facts = [
+    ...(info.organisation ? [['Organisation', info.organisation]] : []),
+    ...(preparedBy ? [['Prepared by', preparedBy]] : []),
     ...(info.industry ? [['Industry', info.industry]] : []),
     ['Model', readableName(info.modelName) || '—'],
     ['Tested on', job.sourceType === 'test_folder' ? 'Held-out test photos from the dataset' : 'Photos uploaded for this test'],
-    ['Date', new Date(job.completedAt || job.createdAt || Date.now()).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' })],
+    ['Date', testedAt.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' })],
   ];
   doc.font('Helvetica').fontSize(10);
   for (const [k, v] of facts) {
@@ -342,6 +353,25 @@ async function writeReport(job, info) {
       const until = new Date(info.expiresAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' });
       doc.font('Helvetica').fontSize(8.5).fillColor(muted).text(`This link works for 24 hours, until ${until}.`, 40, doc.y, { width: W });
     }
+  }
+
+  // On every page, once the page count is known: who made it, which report, and the page number,
+  // under a line like the header's
+  const pages = doc.bufferedPageRange();
+  const footerDate = testedAt.toLocaleDateString('en-IN', { dateStyle: 'medium', timeZone: 'Asia/Kolkata' });
+  for (let i = 0; i < pages.count; i++) {
+    doc.switchToPage(pages.start + i);
+    // Writing below the bottom margin would start a new page: lift it while the footer is drawn
+    const margin = doc.page.margins.bottom;
+    doc.page.margins.bottom = 0;
+    const y = doc.page.height - footerH + 22;
+    const third = W / 3;
+    doc.moveTo(40, y - 10).lineTo(40 + W, y - 10).lineWidth(0.75).strokeColor(line).stroke();
+    doc.font('Helvetica').fontSize(8).fillColor(muted);
+    doc.text('GSN Solutions · visionm.gsnsoln.in', 40, y, { width: third, lineBreak: false, ellipsis: true });
+    doc.text(`${info.title} · ${footerDate}`, 40 + third, y, { width: third, align: 'center', lineBreak: false, ellipsis: true });
+    doc.font('Helvetica-Bold').fillColor(brand).text(`Page ${i + 1} of ${pages.count}`, 40 + third * 2, y, { width: third, align: 'right', lineBreak: false });
+    doc.page.margins.bottom = margin;
   }
 
   doc.end();

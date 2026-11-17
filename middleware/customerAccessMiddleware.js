@@ -181,7 +181,7 @@ async function checkCustomerTraining(user, { modelType, modelSize, modelKey, bas
   }
   const labelled = dataset ? await countLabelledPhotos(dataset) : 0;
   if (dataset && labelled < CUSTOMER_MIN_LABELLED) {
-    return { status: 400, message: `Label at least ${CUSTOMER_MIN_LABELLED} photos before training (${labelled} so far).` };
+    return { status: 400, message: `Label more photos before training (${labelled} labelled so far).` };
   }
 
   if (baseModel?.linkedFrom) {

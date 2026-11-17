@@ -287,7 +287,7 @@ async function deleteProjectRow(company, project) {
       .eq('name', company)
       .maybeSingle();
     if (companyError) return { success: false, error: companyError.message };
-    if (!companyRow) return { success: false, error: `Company "${company}" not found` };
+    if (!companyRow) return { success: false, error: `Organisation "${company}" not found` };
 
     // Match the name ignoring surrounding spaces (some projects were saved as e.g. "webcam ")
     const { data: rows, error: listError } = await supabase

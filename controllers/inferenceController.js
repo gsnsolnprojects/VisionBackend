@@ -250,7 +250,7 @@ const startBatchInference = async (req, res) => {
     // ✅ Validate company/project match
     if (model.company !== dataset.company || model.project !== dataset.project) {
       return res.status(400).json({
-        error: 'Model and dataset must belong to the same company and project',
+        error: 'Model and dataset must belong to the same organisation and project',
         modelCompany: model.company,
         modelProject: model.project,
         datasetCompany: dataset.company,

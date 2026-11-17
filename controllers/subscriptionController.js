@@ -73,7 +73,7 @@ const startCheckout = async (req, res) => {
   try {
     const { plan } = req.body || {};
     if (!canManageBilling(req.user)) {
-      return res.status(403).json({ error: 'Forbidden', message: 'Only a workspace admin can choose a plan for the company' });
+      return res.status(403).json({ error: 'Forbidden', message: 'Only a workspace admin can choose a plan for the organisation' });
     }
     if (!PLANS[plan]) {
       return res.status(400).json({ error: 'Invalid plan', message: `Unknown plan: ${plan}` });
@@ -83,7 +83,7 @@ const startCheckout = async (req, res) => {
     if (sub?.razorpay_subscription_id && sub.status === 'active') {
       return res.status(409).json({
         error: 'Already subscribed',
-        message: 'Your company already has an active plan. Cancel it before choosing a different one.',
+        message: 'Your organisation already has an active plan. Cancel it before choosing a different one.',
       });
     }
 
@@ -128,7 +128,7 @@ const verifyCheckout = async (req, res) => {
 
     const rzpSub = await razorpay.fetchSubscription(subscriptionId);
     if (rzpSub.notes?.company_id !== req.user.company_id) {
-      return res.status(403).json({ error: 'Forbidden', message: 'This payment belongs to a different company' });
+      return res.status(403).json({ error: 'Forbidden', message: 'This payment belongs to a different organisation' });
     }
 
     const result = await razorpay.applyRazorpaySubscription(rzpSub);
@@ -158,7 +158,7 @@ const cancelSubscription = async (req, res) => {
     }
     const sub = req.user.subscription;
     if (!sub?.razorpay_subscription_id || sub.status !== 'active') {
-      return res.status(400).json({ error: 'Nothing to cancel', message: 'Your company has no active paid plan' });
+      return res.status(400).json({ error: 'Nothing to cancel', message: 'Your organisation has no active paid plan' });
     }
 
     await razorpay.cancelSubscriptionAtPeriodEnd(sub.razorpay_subscription_id);

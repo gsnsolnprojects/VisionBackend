@@ -64,7 +64,7 @@ async function uniqueName(base, isTaken) {
 async function resolveTargetProject(req) {
   const project = String(req.body?.project || '').trim();
   if (!req.user?.company || !req.user?.company_id) {
-    return { status: 400, message: 'Create or join a company first' };
+    return { status: 400, message: 'Create or join an organisation first' };
   }
   if (!project) return { status: 400, message: 'Choose a project to add the sample to' };
 
@@ -75,7 +75,7 @@ async function resolveTargetProject(req) {
     .eq('name', project)
     .maybeSingle();
   if (error) throw error;
-  if (!data) return { status: 404, message: `Project "${project}" was not found in your company` };
+  if (!data) return { status: 404, message: `Project "${project}" was not found in your organisation` };
   return { company: req.user.company, project: data.name };
 }
 

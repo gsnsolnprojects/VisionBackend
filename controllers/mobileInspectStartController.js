@@ -111,8 +111,8 @@ const startMobileInspect = async (req, res) => {
 
     if (!company) {
       return res.status(400).json({
-        error: 'Missing company on user',
-        message: 'Your account has no workspace company. Log in again.',
+        error: 'Missing organisation on user',
+        message: 'Your account has no workspace organisation. Log in again.',
       });
     }
 
@@ -312,8 +312,8 @@ const confirmOnDeviceInspect = async (req, res) => {
     }
     if (!company) {
       return res.status(400).json({
-        error: 'Missing company on user',
-        message: 'Your account has no workspace company. Log in again.',
+        error: 'Missing organisation on user',
+        message: 'Your account has no workspace organisation. Log in again.',
       });
     }
     if (uploadedImages.length === 0) {

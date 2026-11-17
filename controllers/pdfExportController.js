@@ -357,7 +357,7 @@ function drawCover(doc, ctx) {
 
   const metaY = 148;
   const meta = [
-    ['Company', company],
+    ['Organisation', company],
     ['Vessel (project)', project],
     ['Survey', surveyName],
     ['Survey period', summary.periodLabel],
