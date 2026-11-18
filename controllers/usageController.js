@@ -3,6 +3,7 @@ const InferenceJob = require('../models/InferenceJob');
 const Dataset = require('../models/Dataset');
 const AuditLog = require('../models/AuditLog');
 const GpuServerSession = require('../models/GpuServerSession');
+const { switchOns } = require('../utils/gpuSessions');
 const UsageRecord = require('../models/UsageRecord');
 const { canAccessAllWorkspaces } = require('../utils/workspaceScoping');
 const { getSupabaseClient } = require('../services/supabaseService');
@@ -243,14 +244,16 @@ const getActivity = async (req, res) => {
 
     // Platform admin: the GPU server's real on-time and cost
     if (isAdmin) {
-      const servers = await GpuServerSession.find({ startedAt: { $lt: end }, $or: [{ stoppedAt: null }, { stoppedAt: { $gte: start } }] })
-        .sort({ startedAt: -1 })
+      const records = await GpuServerSession.find({ startedAt: { $lt: end }, $or: [{ stoppedAt: null }, { stoppedAt: { $gte: start } }] })
         .lean();
-      const rows = servers.map((s) => {
-        const from = new Date(Math.max(new Date(s.startedAt), start));
-        const to = s.stoppedAt ? new Date(Math.min(new Date(s.stoppedAt), end)) : new Date(Math.min(Date.now(), end));
-        return { startedAt: s.startedAt, stoppedAt: s.stoppedAt, running: !s.stoppedAt, minutes: round1(minutesBetween(from, to)) };
-      });
+      const rows = switchOns(records)
+        .filter((s) => s.endMs >= start.getTime())
+        .sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt))
+        .map((s) => {
+          const from = Math.max(new Date(s.startedAt).getTime(), start.getTime());
+          const to = Math.min(s.endMs, end.getTime());
+          return { startedAt: s.startedAt, stoppedAt: s.stoppedAt, running: s.running, minutes: round1(minutesBetween(from, to)) };
+        });
       const totalMinutes = round1(rows.reduce((sum, r) => sum + (r.minutes || 0), 0));
       payload.gpuServer = {
         sessions: rows,

@@ -1518,13 +1518,20 @@ const startWorker = async () => {
         ? { region: gpuPlacement.region, zone: gpuPlacement.zone, instanceType: gpuPlacement.instanceType, instanceId: gpuPlacement.instanceId }
         : {};
       if (gpuPlacement) console.log(`[GPU-SESSION] running in ${gpuPlacement.zone} (${gpuPlacement.instanceType}, ${gpuPlacement.instanceId})`);
-      // A restart of the worker on the same boot reuses that boot's record
+      // A restart of the worker on the same boot (even in a new container, with a new host name)
+      // reuses that boot's record: there is only one GPU server at a time
       const session = await GpuServerSession.findOneAndUpdate(
-        { host, startedAt: { $gte: new Date(bootedAt.getTime() - 60000), $lte: new Date(bootedAt.getTime() + 60000) } },
-        { $setOnInsert: { host, startedAt: bootedAt }, $set: { stoppedAt: null, ...placement } },
-        { upsert: true, new: true }
+        { startedAt: { $gte: new Date(bootedAt.getTime() - 60000), $lte: new Date(bootedAt.getTime() + 60000) } },
+        { $setOnInsert: { startedAt: bootedAt }, $set: { host, stoppedAt: null, lastSeenAt: new Date(), ...placement } },
+        { upsert: true, new: true, sort: { startedAt: 1 } }
       ).catch((e) => console.warn('[GPU-SESSION] could not record:', e.message));
       gpuSessionId = session?._id || null;
+      // Heartbeat: if the server is cut off before SIGTERM, the last beat shows when it went off
+      if (gpuSessionId) {
+        setInterval(() => {
+          GpuServerSession.updateOne({ _id: gpuSessionId }, { $set: { lastSeenAt: new Date() } }).catch(() => {});
+        }, 60 * 1000).unref();
+      }
     }
 
     // ✅ Process jobs from queue (concurrency 1). processTrainingJob now awaits Python,

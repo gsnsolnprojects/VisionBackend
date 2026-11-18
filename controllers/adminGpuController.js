@@ -3,6 +3,7 @@ const fs = require('fs').promises;
 const GpuServerSession = require('../models/GpuServerSession');
 const TrainingJob = require('../models/TrainingJob');
 const { GPU_REGIONS, TRACKED_REGIONS, regionName, inrPerHour } = require('../utils/gpuRegions');
+const { switchOns } = require('../utils/gpuSessions');
 
 /**
  * GET /api/admin/gpu?days=30   (superadmin only)
@@ -61,15 +62,18 @@ const getGpuUsage = async (req, res) => {
     const now = Date.now();
     const since = new Date(now - days * DAY_MS);
 
-    // Switch-ons in the window (and one still on)
-    const servers = await GpuServerSession.find({ $or: [{ startedAt: { $gte: since } }, { stoppedAt: null }] })
+    // Switch-ons in the window (and any record left open), merged into real switch-ons
+    const records = await GpuServerSession.find({ $or: [{ startedAt: { $gte: since } }, { stoppedAt: null }] })
       .sort({ startedAt: -1 })
       .limit(500)
       .lean();
+    const servers = switchOns(records, now)
+      .filter((s) => s.endMs >= since.getTime())
+      .sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt));
 
     // Trainings each one ran: linked directly since 16 Nov 2026, by time for older records
-    const linked = await TrainingJob.find({ gpuSessionId: { $in: servers.map((s) => s._id) } })
-      .select('jobId company project modelType modelSize status startedAt completedAt gpuSessionId gpuZone')
+    const linked = await TrainingJob.find({ gpuSessionId: { $in: records.map((r) => r._id) } })
+      .select('jobId company project modelType modelSize status startedAt completedAt gpuSessionId')
       .lean();
     const byTime = await TrainingJob.find({ device: 'gpu', gpuSessionId: null, startedAt: { $gte: since } })
       .select('jobId company project modelType modelSize status startedAt completedAt')
@@ -77,25 +81,25 @@ const getGpuUsage = async (req, res) => {
 
     const sessions = servers.map((s) => {
       const start = new Date(s.startedAt).getTime();
-      const end = s.stoppedAt ? new Date(s.stoppedAt).getTime() : now;
-      const minutes = round1(Math.max(0, end - start) / 60000);
+      const minutes = round1(Math.max(0, s.endMs - start) / 60000);
       const jobs = [
-        ...linked.filter((j) => String(j.gpuSessionId) === String(s._id)),
+        ...linked.filter((j) => s.ids.includes(String(j.gpuSessionId))),
         ...byTime.filter((j) => {
           const t = new Date(j.startedAt).getTime();
-          return t >= start && t <= end;
+          return t >= start && t <= s.endMs;
         }),
       ].sort((a, b) => new Date(a.startedAt) - new Date(b.startedAt));
       return {
-        id: String(s._id),
-        region: s.region || null,
+        id: s.id,
+        region: s.region,
         regionName: s.region ? regionName(s.region) : null,
-        zone: s.zone || null,
-        instanceType: s.instanceType || null,
-        instanceId: s.instanceId || null,
+        zone: s.zone,
+        instanceType: s.instanceType,
+        instanceId: s.instanceId,
         startedAt: s.startedAt,
         stoppedAt: s.stoppedAt,
-        running: !s.stoppedAt,
+        running: s.running,
+        endEstimated: s.endEstimated,
         minutes,
         costInr: Math.round((minutes / 60) * inrPerHour(s.region)),
         trainings: jobs.map((j) => ({
