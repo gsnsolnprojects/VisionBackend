@@ -234,6 +234,11 @@ const trainingJobSchema = new mongoose.Schema({
   cancelledAt: {
     type: Date
   },
+  // Cancelled after the GPU could have switched on: still uses up one of the month's training runs
+  cancelCountsAsRun: {
+    type: Boolean,
+    default: false
+  },
 
   // Where it trained: 'gpu' (the GPU server) or 'cpu'; set when the worker starts it (usage reports)
   device: {

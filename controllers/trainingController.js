@@ -975,8 +975,12 @@ const cancelTraining = async (req, res) => {
       });
     }
 
+    // Free only while it waits and AWS has no GPU to give (nothing has switched on); otherwise the
+    // GPU may already be starting or training, so the run still counts
+    const freeCancel = trainingJob.status === 'queued' && (await gpuWait()).noGpuAvailable;
     trainingJob.status = 'cancelled';
     trainingJob.cancelledAt = new Date();
+    trainingJob.cancelCountsAsRun = !freeCancel;
     await trainingJob.save();
 
     // Still waiting for a GPU: take it out of the queue too, or a new run can't start and the GPU
@@ -991,6 +995,7 @@ const cancelTraining = async (req, res) => {
     return res.status(200).json({
       jobId: trainingJob.jobId,
       status: 'cancelled',
+      countsAsRun: !freeCancel,
       message: 'Training job cancelled successfully'
     });
 

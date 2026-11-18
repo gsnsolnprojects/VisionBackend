@@ -24,6 +24,8 @@ function startOfMonthIST(now = Date.now()) {
 
 const NOT_WASTED = { $nin: ['failed', 'cancelled'] };
 const WASTED = new Set(['failed', 'cancelled']);
+/** Training runs that count: not failed or cancelled, or cancelled after the GPU could have started */
+const COUNTED_RUN = { $or: [{ status: NOT_WASTED }, { status: 'cancelled', cancelCountsAsRun: true }] };
 
 /** "YYYY-MM" of a date's month in India time */
 function monthKeyIST(date = Date.now()) {
@@ -39,7 +41,7 @@ async function carriedOver(company) {
 /** Training runs started this month */
 async function countTrainingRunsThisMonth(company) {
   const [live, kept] = await Promise.all([
-    TrainingJob.countDocuments({ company, createdAt: { $gte: startOfMonthIST() }, status: NOT_WASTED }),
+    TrainingJob.countDocuments({ company, createdAt: { $gte: startOfMonthIST() }, ...COUNTED_RUN }),
     carriedOver(company),
   ]);
   return live + (kept.trainingRuns || 0);
@@ -66,7 +68,7 @@ async function countPredictionsThisMonth(company) {
 async function keepDeletedUsage({ trainingJobs = [], inferenceJobs = [] }) {
   const totals = new Map();
   const add = (job, field, amount) => {
-    if (!job?.company || WASTED.has(job.status) || !amount) return;
+    if (!job?.company || (WASTED.has(job.status) && !(field === 'trainingRuns' && job.cancelCountsAsRun)) || !amount) return;
     const key = `${job.company}\u0000${monthKeyIST(job.createdAt || Date.now())}`;
     const row = totals.get(key) || { trainingRuns: 0, predictions: 0 };
     row[field] += amount;
