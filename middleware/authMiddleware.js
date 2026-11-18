@@ -79,7 +79,7 @@ async function loadProfile(userId) {
   const supabase = getSupabaseClient();
   const { data: profile, error } = await supabase
     .from('profiles')
-    .select('id, email, role, company_id, is_active')
+    .select('id, email, name, role, company_id, is_active')
     .eq('id', userId)
     .maybeSingle();
   if (error) throw error;
@@ -140,6 +140,7 @@ async function resolveUser(req) {
     user: {
       id: profile.id,
       email: profile.email || verified.email,
+      name: profile.name || null,
       role,
       company_id: profile.company_id || null,
       company: profile.company_name, // Company name, used to scope MongoDB data (e.g. "gsn")

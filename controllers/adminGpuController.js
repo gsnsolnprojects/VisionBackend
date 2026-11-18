@@ -73,10 +73,10 @@ const getGpuUsage = async (req, res) => {
 
     // Trainings each one ran: linked directly since 16 Nov 2026, by time for older records
     const linked = await TrainingJob.find({ gpuSessionId: { $in: records.map((r) => r._id) } })
-      .select('jobId company project modelType modelSize status startedAt completedAt gpuSessionId')
+      .select('jobId company project modelType modelSize status startedAt completedAt gpuSessionId startedBy')
       .lean();
     const byTime = await TrainingJob.find({ device: 'gpu', gpuSessionId: null, startedAt: { $gte: since } })
-      .select('jobId company project modelType modelSize status startedAt completedAt')
+      .select('jobId company project modelType modelSize status startedAt completedAt startedBy')
       .lean();
 
     const sessions = servers.map((s) => {
@@ -108,6 +108,8 @@ const getGpuUsage = async (req, res) => {
           project: j.project,
           model: [j.modelType, j.modelSize].filter(Boolean).join(' '),
           status: j.status,
+          userName: j.startedBy?.name || null,
+          userEmail: j.startedBy?.email || null,
           startedAt: j.startedAt || null,
           completedAt: j.completedAt || null,
         })),

@@ -234,6 +234,12 @@ const trainingJobSchema = new mongoose.Schema({
   cancelledAt: {
     type: Date
   },
+  // Who clicked Start (from 18 Nov 2026; older runs have none), shown in the superadmin GPU panel
+  startedBy: {
+    userId: { type: String, default: null },
+    name: { type: String, default: null },
+    email: { type: String, default: null }
+  },
   // Cancelled after the GPU could have switched on: still uses up one of the month's training runs
   cancelCountsAsRun: {
     type: Boolean,

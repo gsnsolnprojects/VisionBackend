@@ -10,6 +10,9 @@ const fs = require('fs');
 const path = require('path');
 const { gpuWait, estimateTrainingMinutes, STARTUP_MINUTES } = require('../utils/gpuWait');
 const { BlobServiceClient } = require('@azure/storage-blob');
+
+/** Who started a training, kept on the run for the superadmin GPU panel */
+const startedByOf = (user) => ({ userId: user?.id || null, name: user?.name || null, email: user?.email || null });
 const {
   hydrateAndPersistModelMetrics,
   formatModelNameWithMap,
@@ -698,7 +701,8 @@ const startTraining = async (req, res) => {
       requestedModelVersion: requestedModelVersion || null,
       augmentationPreset: normalizedAugmentationPreset,
       status: 'queued',
-      hyperparameters: mergedHyperparameters
+      hyperparameters: mergedHyperparameters,
+      startedBy: startedByOf(req.user)
     });
 
     await trainingJob.save();
@@ -1065,6 +1069,7 @@ const retryTraining = async (req, res) => {
     const newJobId = trainingService.generateJobId();
     const newTrainingJob = new TrainingJob({
       jobId: newJobId,
+      startedBy: startedByOf(req.user),
       datasetId: originalJob.datasetId,
       company: originalJob.company,
       project: originalJob.project,
