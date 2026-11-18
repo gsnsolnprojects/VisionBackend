@@ -33,6 +33,7 @@ function guessIndustry(dataset) {
   if (/car ?seat|leather|automo/.test(text)) return 'Automotive';
   if (/pcb|connectwell|terminal|electron/.test(text)) return 'Electronics';
   if (/rust|corros|irina|varuna|ship|marine/.test(text)) return 'Marine & Corrosion';
+  if (/bottle|cap|caps|food|beverage|drink|juice|can|cans/.test(text)) return 'Food & Beverages';
   return 'General';
 }
 

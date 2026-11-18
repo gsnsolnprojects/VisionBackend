@@ -9,7 +9,7 @@ const mongoose = require('mongoose');
  * underlying dataset in their own project.
  */
 
-const SAMPLE_INDUSTRIES = ['Pharma', 'Automotive', 'Electronics', 'Marine & Corrosion', 'General'];
+const SAMPLE_INDUSTRIES = ['Pharma', 'Automotive', 'Electronics', 'Marine & Corrosion', 'Food & Beverages', 'General'];
 
 const sampleLibraryItemSchema = new mongoose.Schema(
   {
