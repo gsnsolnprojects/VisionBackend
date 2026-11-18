@@ -396,6 +396,70 @@ async function downloadBaseModelForJob({ jobId, modelType = 'YOLO', modelSize, m
  * @param {string} modelSize - Optional model size (n, s, m, l) - defaults to 'n'
  * @returns {Promise<string>} Path to generated config file
  */
+/**
+ * A GPU outside Mumbai reads the photos over the network from the Mumbai server, a few photos a
+ * second, and YOLO reads them again every epoch: a 50-epoch run took far longer than in Mumbai.
+ * There, the dataset is copied once to the GPU's own disk (many files at a time) and trained from
+ * the copy. TRAIN_LOCAL_COPY=1 forces it on, =0 off.
+ */
+const LOCAL_DATASET_ROOT = path.join(os.tmpdir(), 'vision-train-datasets');
+const HOME_REGION = 'ap-south-1';
+
+function shouldCopyDatasetLocally() {
+  if (process.env.TRAIN_LOCAL_COPY === '1') return true;
+  if (process.env.TRAIN_LOCAL_COPY === '0') return false;
+  return ON_GPU_SERVER && !!gpuPlacement?.region && gpuPlacement.region !== HOME_REGION;
+}
+
+async function copyDatasetLocally(sourceRoot, jobId) {
+  // Only one training runs at a time: earlier copies can go
+  await fsPromises.rm(LOCAL_DATASET_ROOT, { recursive: true, force: true });
+  const targetRoot = path.join(LOCAL_DATASET_ROOT, String(jobId));
+  const started = Date.now();
+
+  const files = [];
+  const walk = async (rel) => {
+    const entries = await fsPromises.readdir(path.join(sourceRoot, rel), { withFileTypes: true });
+    await Promise.all(
+      entries.map(async (entry) => {
+        const relPath = path.join(rel, entry.name);
+        if (entry.isDirectory()) {
+          await fsPromises.mkdir(path.join(targetRoot, relPath), { recursive: true });
+          await walk(relPath);
+        } else if (entry.isFile() && !entry.name.endsWith('.cache')) {
+          files.push(relPath);
+        }
+      })
+    );
+  };
+  await fsPromises.mkdir(targetRoot, { recursive: true });
+  await walk('');
+
+  // Network round trips, not bandwidth, are the slow part: copy many files at once
+  let next = 0;
+  const copyNext = async () => {
+    while (next < files.length) {
+      const relPath = files[next++];
+      await fsPromises.copyFile(path.join(sourceRoot, relPath), path.join(targetRoot, relPath));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(32, files.length) }, copyNext));
+
+  // data.yaml may name the Mumbai folder: point it at the copy
+  const yamlPath = path.join(targetRoot, 'data.yaml');
+  try {
+    const yaml = await fsPromises.readFile(yamlPath, 'utf8');
+    const fixed = /^path:.*$/m.test(yaml) ? yaml.replace(/^path:.*$/m, `path: ${targetRoot}`) : `path: ${targetRoot}
+${yaml}`;
+    await fsPromises.writeFile(yamlPath, fixed, 'utf8');
+  } catch {
+    // no data.yaml yet: generateTrainingConfig writes one with this path
+  }
+
+  console.log(`📥 Copied ${files.length} dataset files to this GPU's disk in ${((Date.now() - started) / 1000).toFixed(1)} s: ${targetRoot}`);
+  return targetRoot;
+}
+
 async function generateTrainingConfig(
   hyperparameters,
   datasetPath,
@@ -857,6 +921,7 @@ const processTrainingJob = async (job) => {
     }
 
     let rfdetrDatasetPath = null;
+    let localDatasetPath = null;
     const configPath = path.join(modelStoragePath, 'training-config.json');
 
     if (isRfdetr) {
@@ -869,9 +934,18 @@ const processTrainingJob = async (job) => {
         modelPath
       );
     } else {
+      if (shouldCopyDatasetLocally()) {
+        try {
+          localDatasetPath = await copyDatasetLocally(datasetPath, jobId);
+        } catch (err) {
+          // Slow but still works: train straight from the Mumbai folder
+          console.warn(`⚠️ Could not copy the dataset to this GPU, training from the shared folder: ${err.message}`);
+          localDatasetPath = null;
+        }
+      }
       await generateTrainingConfig(
         hyperparameters,
-        datasetPath,
+        localDatasetPath || datasetPath,
         configPath,
         modelType,
         modelSize,
@@ -1133,6 +1207,17 @@ const processTrainingJob = async (job) => {
     });
 
     clearInterval(cancellationCheck);
+
+    // Trained from a copy on this GPU: keep the class names train.py wrote, as a Mumbai run would
+    if (localDatasetPath) {
+      try {
+        const localYaml = await fsPromises.readFile(path.join(localDatasetPath, 'data.yaml'), 'utf8');
+        await fsPromises.writeFile(path.join(datasetPath, 'data.yaml'), localYaml.replace(/^path:.*$/m, `path: ${datasetPath}`), 'utf8');
+      } catch (err) {
+        console.warn(`⚠️ Could not copy data.yaml back from this GPU: ${err.message}`);
+      }
+      await fsPromises.rm(localDatasetPath, { recursive: true, force: true }).catch(() => {});
+    }
 
     flushTrainingStreamBuffer(stdoutStream, handleTrainingOutputLine);
     flushTrainingStreamBuffer(stderrStream, (line) => {
