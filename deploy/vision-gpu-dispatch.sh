@@ -19,8 +19,8 @@ SUBNETS="subnet-0302b6f0631e3ea43:ap-south-1a subnet-08df76b64edb7d0ea:ap-south-
 # Fallback regions abroad, tried in this order: "region ami security-group subnet:zone subnet:zone ..."
 # (each needs a copy of the AMI, a VPC peered with Mumbai, and the G-instance quota)
 REMOTE=(
-  "us-east-2 ami-0ba55e60c8327513a sg-0da085a9552d8e01f subnet-0c9999b390b009f52:us-east-2a subnet-0a346f10a36e3d824:us-east-2b subnet-0b5586265edd20d10:us-east-2c"
-  "eu-west-1 ami-0ac3319288c349f9c sg-0a4fefc3eb97bd9d5 subnet-02ad83adc0ada1af4:eu-west-1a subnet-0f8da818579979332:eu-west-1b subnet-0b7b7bae3b5caa159:eu-west-1c"
+  "us-east-2 ami-057ac9f5142c18cf1 sg-0da085a9552d8e01f subnet-0c9999b390b009f52:us-east-2a subnet-0a346f10a36e3d824:us-east-2b subnet-0b5586265edd20d10:us-east-2c"
+  "eu-west-1 ami-06f6adaf6cfeb016e sg-0a4fefc3eb97bd9d5 subnet-02ad83adc0ada1af4:eu-west-1a subnet-0f8da818579979332:eu-west-1b subnet-0b7b7bae3b5caa159:eu-west-1c"
 )
 NO_GPU=/srv/vision/data/.gpu-no-capacity
 LOG_DIR=/srv/vision/data/gpu-tracking
