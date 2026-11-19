@@ -26,6 +26,10 @@ const router = express.Router();
 
 router.post('/runs/:inferenceId/close', authenticateToken, requirePermission('runInference'), closeTest);
 router.post('/runs/:inferenceId/report', authenticateToken, requirePermission('runInference'), createReport);
+const { getIndustrySettings } = require('../controllers/playgroundIndustryController');
+
+// Superadmin settings for the industry cards (difficulty)
+router.get('/industries', authenticateToken, getIndustrySettings);
 router.get('/reports', authenticateToken, requirePermission('viewInferenceResults'), listReports);
 router.get('/reports/:id/download', authenticateToken, requirePermission('viewInferenceResults'), downloadReport);
 router.get('/reports/:id/csv', authenticateToken, requirePermission('viewInferenceResults'), downloadCsv);

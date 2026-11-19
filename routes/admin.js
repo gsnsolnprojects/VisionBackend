@@ -34,6 +34,7 @@ const {
   setProjectPublish,
 } = require('../controllers/adminPublishController');
 const { getGpuUsage } = require('../controllers/adminGpuController');
+const { getIndustrySettings, setIndustryDifficulty } = require('../controllers/playgroundIndustryController');
 
 /**
  * Superadmin Routes (GSN platform admin only)
@@ -73,6 +74,10 @@ router.get('/revenue', getRevenue);
 router.get('/jobs', listJobs);
 router.get('/audit', listAudit);
 router.get('/gpu', getGpuUsage);
+
+// Playground industries: difficulty shown on each industry card
+router.get('/playground/industries', getIndustrySettings);
+router.put('/playground/industries/:industryId', setIndustryDifficulty);
 
 // Playground sample dataset library
 router.get('/sample-library', listLibrary);
