@@ -106,12 +106,49 @@ def save_mask_only_image(result, dest_path, alpha=0.45):
     return bool(cv2.imwrite(dest_path, img, params))
 
 
+# The web app's labelling colours, by class index (BOX_COLORS in the frontend), so a class has
+# the same colour in the test result as when it was labelled: red, green, blue, amber, ...
+LABEL_COLORS_HEX = ["#ef4444", "#10b981", "#3b82f6", "#f59e0b", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316"]
+LABEL_COLORS_BGR = [(int(h[5:7], 16), int(h[3:5], 16), int(h[1:3], 16)) for h in LABEL_COLORS_HEX]
+
+
+def draw_label_colored_boxes(result):
+    """Boxes with class + confidence, in the labelling colours. None if there's nothing to draw on."""
+    orig = getattr(result, "orig_img", None)
+    if orig is None:
+        return None
+    img = orig.copy()
+    boxes = getattr(result, "boxes", None)
+    names = getattr(result, "names", None) or {}
+    if boxes is None or len(boxes) == 0:
+        return img
+    h, w = img.shape[:2]
+    # Line and text grow with the photo, so they read the same on a small or a 4000 px photo
+    thick = max(2, round((h + w) / 2 * 0.003))
+    font_scale = max(0.5, thick / 3)
+    font_thick = max(1, thick - 1)
+    for xyxy, cls, conf in zip(boxes.xyxy.tolist(), boxes.cls.tolist(), boxes.conf.tolist()):
+        cls_idx = int(cls)
+        color = LABEL_COLORS_BGR[cls_idx % len(LABEL_COLORS_BGR)]
+        x1, y1, x2, y2 = (int(round(v)) for v in xyxy)
+        cv2.rectangle(img, (x1, y1), (x2, y2), color, thick, cv2.LINE_AA)
+        text = f"{names.get(cls_idx, f'class_{cls_idx}')} {conf:.2f}"
+        (tw, th), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thick)
+        # Label tag above the box, or inside it when the box touches the top edge
+        top = y1 - th - base - 4 if y1 - th - base - 4 >= 0 else y1
+        cv2.rectangle(img, (x1, top), (x1 + tw + 6, top + th + base + 4), color, -1)
+        cv2.putText(img, text, (x1 + 3, top + th + 2), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), font_thick, cv2.LINE_AA)
+    return img
+
+
 def save_box_image(result, dest_path):
-    """Write YOLO's standard picture (boxes + class + confidence) for a detection model result."""
+    """Write the test picture (boxes + class + confidence) for a detection model result."""
     if cv2 is None:
         return False
     try:
-        img = result.plot()  # BGR array with boxes and labels drawn
+        img = draw_label_colored_boxes(result)
+        if img is None:
+            img = result.plot()  # YOLO's own picture as a fallback
     except Exception as e:
         print(f"⚠️ Could not draw boxes: {e}", file=sys.stderr)
         return False
