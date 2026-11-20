@@ -66,6 +66,22 @@ function parseModelKeyInfo(modelKey) {
 
 /** Max length for optional modelVersion / display name (matches typical frontend limit). */
 const MODEL_VERSION_MAX_LENGTH = 120;
+
+/**
+ * The next free model name for a project: one past the highest existing vN, skipping any folder
+ * already on disk (a deleted model, a failed run). Never "count + 1", which after a delete gave the
+ * name of a model that still existed.
+ */
+async function nextModelVersion(company, project) {
+  const existing = await Model.find({ company, project }, { modelVersion: 1 }).lean();
+  let next = 1;
+  for (const m of existing) {
+    const num = /^v(\d+)$/i.exec(String(m.modelVersion || '').trim());
+    if (num) next = Math.max(next, Number(num[1]) + 1);
+  }
+  while (fs.existsSync(path.join(process.cwd(), 'models', company, project, `v${next}`))) next++;
+  return `v${next}`;
+}
 const ALLOWED_AUGMENTATION_PRESETS = new Set([
   'none',
   'color_invariant',
@@ -686,6 +702,11 @@ const startTraining = async (req, res) => {
       return;
     }
 
+    // The name is fixed now, so a GPU trainer on an older image (which used "count + 1" and could
+    // reuse a live model's name after a delete) trains into a folder of its own
+    const jobModelVersion =
+      requestedModelVersion || (await nextModelVersion(dataset.company, dataset.project));
+
     // Generate job ID
     const jobId = trainingService.generateJobId();
 
@@ -698,7 +719,7 @@ const startTraining = async (req, res) => {
       modelType: finalModelType,
       modelSize: finalModelSize,
       modelKey: finalModelKey,
-      requestedModelVersion: requestedModelVersion || null,
+      requestedModelVersion: jobModelVersion,
       augmentationPreset: normalizedAugmentationPreset,
       status: 'queued',
       hyperparameters: mergedHyperparameters,
@@ -717,7 +738,7 @@ const startTraining = async (req, res) => {
       modelSize: finalModelSize,
       modelKey: finalModelKey,
       modelId: modelId || null, // ✅ Pass modelId if provided (for trained model)
-      requestedModelVersion: requestedModelVersion || null,
+      requestedModelVersion: jobModelVersion,
       augmentationPreset: normalizedAugmentationPreset,
       hyperparameters: mergedHyperparameters
     }, {
