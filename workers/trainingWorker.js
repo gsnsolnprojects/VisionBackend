@@ -822,9 +822,17 @@ const processTrainingJob = async (job) => {
     if (fromJob) {
       modelVersion = fromJob;
     } else {
-      const existingModels = await Model.find({ company, project }).sort({ createdAt: -1 });
-      modelVersion =
-        existingModels.length > 0 ? `v${existingModels.length + 1}` : 'v1';
+      // Next number after the highest existing vN, not "count + 1": after a model is deleted the
+      // count drops, and count + 1 reused a live model's name and overwrote its best.pt.
+      const existingModels = await Model.find({ company, project }, { modelVersion: 1 }).lean();
+      let next = 1;
+      for (const m of existingModels) {
+        const num = /^v(\d+)$/i.exec(String(m.modelVersion || '').trim());
+        if (num) next = Math.max(next, Number(num[1]) + 1);
+      }
+      // A folder left on disk (a deleted model, a failed run) is never reused either
+      while (await storageAdapter.exists(path.join(process.cwd(), 'models', company, project, `v${next}`))) next++;
+      modelVersion = `v${next}`;
     }
 
     const modelStoragePath = path.join(
