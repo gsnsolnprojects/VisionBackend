@@ -13,6 +13,10 @@
  * visiondb_prod), keeping the same _ids so re-running updates instead of duplicating.
  * File locations are rewritten from this computer's folder to the server's /data.
  *
+ * The organisation and project rows behind those datasets are copied from the local accounts
+ * database (DATABASE_URL) into the live one on the server (same ids, through SSM + psql),
+ * because local and live no longer share one projects table.
+ *
  * Files (dataset folders, model folders without training leftovers) go through a private
  * S3 bucket: uploaded with `aws s3 sync` (only new / changed files), pulled onto the
  * server with an SSM command, then removed from the bucket.
@@ -99,6 +103,82 @@ function aws(args, opts = {}) {
   return execFileSync(AWS, [...args, '--region', REGION], { encoding: 'utf8', stdio: opts.inherit ? 'inherit' : 'pipe', env: { ...process.env, MSYS_NO_PATHCONV: '1' } });
 }
 
+/** Run a shell command on the API server through SSM and wait for it. Returns its output. */
+async function runOnServer(command, comment, timeoutSeconds = 3600) {
+  const commandId = aws(['ssm', 'send-command', '--instance-ids', INSTANCE_ID, '--document-name', 'AWS-RunShellScript',
+    '--comment', comment, '--parameters', JSON.stringify({ commands: [command], executionTimeout: [String(timeoutSeconds)] }),
+    '--query', 'Command.CommandId', '--output', 'text']).trim();
+  let status = 'Pending', out = '', err = '';
+  for (let i = 0; i < timeoutSeconds / 5 && ['Pending', 'InProgress', 'Delayed'].includes(status); i++) {
+    await new Promise((r) => setTimeout(r, 5000));
+    try {
+      [status, out, err] = JSON.parse(aws(['ssm', 'get-command-invocation', '--command-id', commandId, '--instance-id', INSTANCE_ID,
+        '--query', '[Status,StandardOutputContent,StandardErrorContent]', '--output', 'json']).replace(/[^\x09\x0a\x0d\x20-\x7e]/g, ''));
+    } catch { status = 'Pending'; }
+  }
+  if (status !== 'Success') throw new Error(`${comment} failed on the server (${status}): ${err || out}`);
+  return out;
+}
+
+const sameName = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+
+/**
+ * The organisation and project rows (accounts database) behind the published datasets.
+ * Local and live used to share one Supabase projects table; now each has its own Postgres,
+ * so published projects (and their organisation) are copied across too.
+ * Returns { companies, projects, problems }.
+ */
+async function loadProjectRows(datasets) {
+  const db = require('../db');
+  const { rows: companyRows } = await db.query('select id, name, email, admin_email, description, created_at, created_by from public.companies');
+  const { rows: projectRows } = await db.query(
+    'select id, company_id, name, description, created_at, created_by, project_type, publish_to_live from public.projects'
+  );
+  const companies = new Map();
+  const projects = new Map();
+  const problems = [];
+  const pairs = new Map(datasets.map((d) => [`${String(d.company).trim().toLowerCase()}/${String(d.project).trim().toLowerCase()}`, d]));
+  for (const d of pairs.values()) {
+    const company = companyRows.find((c) => sameName(c.name, d.company));
+    if (!company) { problems.push(`organisation "${d.company}" (dataset ${d.project}/${d.version}) is not in the local accounts database`); continue; }
+    const matches = projectRows.filter((p) => p.company_id === company.id && sameName(p.name, d.project));
+    if (matches.length === 0) { problems.push(`project "${String(d.project).trim()}" of "${company.name}" is not in the local accounts database`); continue; }
+    companies.set(company.id, company);
+    for (const p of matches) projects.set(p.id, p);
+  }
+  return { companies: [...companies.values()], projects: [...projects.values()], problems };
+}
+
+/**
+ * SQL that inserts / updates the organisation and project rows in the live database (same ids,
+ * so re-publishing updates). "Created by" is kept only when that person also exists on live.
+ */
+function projectRowsSql(companies, projects) {
+  const payload = JSON.stringify({ companies, projects });
+  const tag = `pub_${Date.now().toString(36)}`;
+  if (payload.includes(`$${tag}$`)) throw new Error('Unexpected text in the project data');
+  return `begin;
+create temp table pub_data on commit drop as select $${tag}$${payload}$${tag}$::jsonb as j;
+insert into public.companies (id, name, email, admin_email, description, created_at, created_by)
+select (x->>'id')::uuid, x->>'name', coalesce(x->>'email', ''), coalesce(x->>'admin_email', ''), x->>'description',
+       coalesce((x->>'created_at')::timestamptz, now()),
+       (select u.id from auth.users u where u.id = nullif(x->>'created_by', '')::uuid)
+  from pub_data, jsonb_array_elements(j->'companies') x
+on conflict (id) do update set name = excluded.name, description = excluded.description;
+insert into public.projects (id, company_id, name, description, created_at, created_by, project_type, publish_to_live)
+select (x->>'id')::uuid, (x->>'company_id')::uuid, x->>'name', x->>'description',
+       coalesce((x->>'created_at')::timestamptz, now()),
+       (select u.id from auth.users u where u.id = nullif(x->>'created_by', '')::uuid),
+       coalesce(x->>'project_type', 'generic'), coalesce((x->>'publish_to_live')::boolean, true)
+  from pub_data, jsonb_array_elements(j->'projects') x
+on conflict (id) do update set name = excluded.name, description = excluded.description,
+  project_type = excluded.project_type, publish_to_live = excluded.publish_to_live;
+select 'live now has ' || (select count(*) from public.projects p
+  where p.id in (select (x->>'id')::uuid from pub_data, jsonb_array_elements(j->'projects') x)) || ' of the published project rows';
+commit;
+`;
+}
+
 // ---------- main ----------
 
 (async () => {
@@ -143,14 +223,22 @@ function aws(args, opts = {}) {
     if (!rel || !fs.existsSync(m.storagePath)) { problems.push(`model ${m.modelId}: files not on this computer (${m.storagePath})`); continue; }
     if (!folders.has(rel)) folders.set(rel, { label: `model ${String(m.project).trim()} / ${m.modelType} ${m.modelVersion}`, ...folderSize(m.storagePath) });
   }
+  // Organisation and project rows (accounts database) behind these datasets
+  const accountRows = await loadProjectRows(datasets);
+  problems.push(...accountRows.problems);
+
   if (problems.length) {
     console.log('Cannot publish:\n  ' + problems.join('\n  '));
     await local.close();
+    await require('../db').close();
     process.exit(1);
   }
 
   console.log('Records to copy:');
   for (const [name, docs] of Object.entries(records)) console.log(`  ${name.padEnd(20)} ${docs.length}`);
+  console.log('\nAccount rows to copy (organisation and project, same ids):');
+  for (const c of accountRows.companies) console.log(`  organisation ${c.name}`);
+  for (const p of accountRows.projects) console.log(`  project      ${String(p.name).trim()}${p.publish_to_live === false ? '   (hidden on live: publish_to_live is off)' : ''}`);
   console.log('\nFolders to upload (without training leftovers):');
   let total = 0;
   for (const [rel, f] of folders) { total += f.bytes; console.log(`  ${f.label.padEnd(55)} ${String(f.files).padStart(5)} files  ${mb(f.bytes).padStart(10)}   -> ${SERVER_DATA}/${rel}`); }
@@ -161,11 +249,12 @@ function aws(args, opts = {}) {
 
   if (!APPLY) {
     await local.close();
+    await require('../db').close();
     return;
   }
 
   // 1) Files: this computer -> S3
-  console.log('\n[1/4] Uploading files to the staging bucket...');
+  console.log('\n[1/5] Uploading files to the staging bucket...');
   const excludeArgs = EXCLUDES.flatMap((p) => ['--exclude', p]);
   for (const [rel, f] of folders) {
     console.log(`  ${f.label}`);
@@ -173,24 +262,23 @@ function aws(args, opts = {}) {
   }
 
   // 2) Files: S3 -> server
-  console.log('[2/4] Pulling files onto the server...');
+  console.log('[2/5] Pulling files onto the server...');
   const syncCmd = `aws s3 sync s3://${BUCKET}/publish/ ${SERVER_HOST_DATA}/ --region ${REGION} --only-show-errors && du -sh ${SERVER_HOST_DATA}`;
-  const commandId = aws(['ssm', 'send-command', '--instance-ids', INSTANCE_ID, '--document-name', 'AWS-RunShellScript',
-    '--comment', 'publish to live', '--parameters', JSON.stringify({ commands: [syncCmd], executionTimeout: ['3600'] }),
-    '--query', 'Command.CommandId', '--output', 'text']).trim();
-  let status = 'Pending', out = '';
-  for (let i = 0; i < 360 && ['Pending', 'InProgress', 'Delayed'].includes(status); i++) {
-    await new Promise((r) => setTimeout(r, 5000));
-    try {
-      [status, out] = JSON.parse(aws(['ssm', 'get-command-invocation', '--command-id', commandId, '--instance-id', INSTANCE_ID,
-        '--query', '[Status,StandardOutputContent,StandardErrorContent]', '--output', 'json']).replace(/[^\x09\x0a\x0d\x20-\x7e]/g, ''));
-    } catch { status = 'Pending'; }
-  }
-  if (status !== 'Success') throw new Error(`Server could not pull the files (${status}): ${out}`);
+  const out = await runOnServer(syncCmd, 'publish to live: pull files');
   console.log(`  server data folder now: ${out.trim()}`);
 
-  // 3) Records: local -> live database (same _ids; replace = update when re-published)
-  console.log('[3/4] Copying records to the live database...');
+  // 3) Organisation + project rows: local accounts database -> live accounts database (same ids)
+  console.log('[3/5] Copying organisation and project rows to the live accounts database...');
+  const sqlB64 = Buffer.from(projectRowsSql(accountRows.companies, accountRows.projects), 'utf8').toString('base64');
+  const rowsOut = await runOnServer(
+    `echo '${sqlB64}' | base64 -d | docker exec -i vision-postgres-1 psql -U postgres -d vision -v ON_ERROR_STOP=1 -At -q`,
+    'publish to live: project rows',
+    300
+  );
+  console.log(`  ${rowsOut.trim()}`);
+
+  // 4) Records: local -> live database (same _ids; replace = update when re-published)
+  console.log('[4/5] Copying records to the live database...');
   for (const [name, docs] of Object.entries(records)) {
     if (docs.length === 0) continue;
     const ops = docs.map((doc) => ({ replaceOne: { filter: { _id: doc._id }, replacement: rewritePaths(doc), upsert: true } }));
@@ -198,12 +286,13 @@ function aws(args, opts = {}) {
     console.log(`  ${name.padEnd(20)} ${result.upsertedCount} new, ${result.modifiedCount} updated`);
   }
 
-  // 4) Empty the staging bucket
-  console.log('[4/4] Emptying the staging bucket...');
+  // 5) Empty the staging bucket
+  console.log('[5/5] Emptying the staging bucket...');
   aws(['s3', 'rm', `s3://${BUCKET}/publish/`, '--recursive', '--only-show-errors'], { inherit: true });
 
   console.log('\nPublished.');
   await local.close();
+  await require('../db').close();
 })().catch(async (error) => {
   console.error('\nPUBLISH FAILED:', error.message);
   process.exit(1);
