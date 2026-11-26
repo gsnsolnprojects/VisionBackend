@@ -14,6 +14,24 @@
       "port": 3000
     },
     {
+      "name": "vision-preprocessing-worker",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "start:worker"],
+      "port": 3998
+    },
+    {
+      "name": "vision-inference-worker",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "start:inference-worker"],
+      "port": 3997
+    },
+    {
+      "name": "vision-training-worker",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "start:training-worker"],
+      "port": 3999
+    },
+    {
       "name": "visionm-authflow-alt",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "C:\\Gsn Soln\\visionm-authflow", "--", "--port", "5180", "--strictPort"],
