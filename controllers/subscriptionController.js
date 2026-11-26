@@ -1,4 +1,4 @@
-const { getSupabaseClient } = require('../services/supabaseService');
+const db = require('../db');
 const razorpay = require('../services/razorpayService');
 const { invalidateCompanyCache } = require('../middleware/authMiddleware');
 const { PLANS, PLAN_ORDER } = require('../utils/plans');
@@ -30,13 +30,13 @@ const getSubscription = async (req, res) => {
       return res.json({ plans, subscription: null, access, usage: null, billing });
     }
 
-    const supabase = getSupabaseClient();
-    const [members, projects] = await Promise.all([
-      supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
-      supabase.from('projects').select('id', { count: 'exact', head: true }).eq('company_id', companyId),
-    ]);
-    if (members.error) throw members.error;
-    if (projects.error) throw projects.error;
+    const counts = await db.one(
+      `select (select count(*)::int from public.profiles where company_id = $1) as members,
+              (select count(*)::int from public.projects where company_id = $1) as projects`,
+      [companyId]
+    );
+    const members = { count: counts.members };
+    const projects = { count: counts.projects };
 
     res.json({
       plans,
@@ -163,12 +163,10 @@ const cancelSubscription = async (req, res) => {
 
     await razorpay.cancelSubscriptionAtPeriodEnd(sub.razorpay_subscription_id);
 
-    const supabase = getSupabaseClient();
-    const { error } = await supabase
-      .from('company_subscriptions')
-      .update({ cancel_at_period_end: true })
-      .eq('company_id', req.user.company_id);
-    if (error) throw error;
+    await db.query(
+      'update public.company_subscriptions set cancel_at_period_end = true where company_id = $1',
+      [req.user.company_id]
+    );
 
     invalidateCompanyCache(req.user.company_id);
     res.json({ success: true, cancelsOn: sub.current_period_end });

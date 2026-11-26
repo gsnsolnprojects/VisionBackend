@@ -19,7 +19,8 @@ const PlaygroundReport = require('../models/PlaygroundReport');
 const UsageCarryover = require('../models/UsageCarryover');
 const StationRun = require('../models/StationRun');
 const StationDefect = require('../models/StationDefect');
-const { getSupabaseClient } = require('../services/supabaseService');
+const db = require('../db');
+const { revokeAllSessions } = require('../services/authService');
 const razorpay = require('../services/razorpayService');
 const auditService = require('../services/auditService');
 const { PLANS } = require('../utils/plans');
@@ -30,8 +31,8 @@ const { removeLibraryEntriesForDatasets } = require('../services/sampleLibrarySe
  * Superadmin (GSN platform admin) panel
  *
  * Every route here sits behind requireSuperadmin. Reads across ALL companies:
- * users and companies come from Supabase (service role), datasets / models / jobs
- * from MongoDB, payments from subscription_payments.
+ * users and companies come from the accounts database (Postgres, system role), datasets /
+ * models / jobs from MongoDB, payments from subscription_payments.
  *
  * GET    /api/admin/overview
  * GET    /api/admin/users
@@ -48,27 +49,26 @@ const { removeLibraryEntriesForDatasets } = require('../services/sampleLibrarySe
 
 const GSN_COMPANY = 'gsn';
 const DAY_MS = 24 * 60 * 60 * 1000;
-const BAN_FOREVER = '876000h'; // ~100 years: Supabase's way of blocking sign-in
+const BAN_FOREVER_SQL = "now() + interval '100 years'"; // blocks sign-in (auth.users.banned_until)
 const ACTIVE_JOB_STATUSES = ['queued', 'running'];
 
 const isGsn = (name) => String(name || '').trim().toLowerCase() === GSN_COMPANY;
 
-/** Throw on a Supabase error, otherwise return its data */
-function unwrap({ data, error }) {
-  if (error) throw error;
-  return data;
+/** All rows of a query (system role) */
+const selectAll = async (sql, params) => (await db.query(sql, params)).rows;
+
+/** { id, name } of a company, or null (also for ids that aren't UUIDs) */
+async function companyById(companyId) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(companyId || ''))) return null;
+  return db.one('select id, name from public.companies where id = $1', [companyId]);
 }
 
-/** All Supabase Auth users (sign-in data: email verified, last login, banned) */
-async function listAuthUsers(supabase) {
-  const users = [];
-  for (let page = 1; ; page++) {
-    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
-    if (error) throw error;
-    users.push(...data.users);
-    if (data.users.length < 1000) break;
-  }
-  return users;
+/** All login accounts (sign-in data: email verified, last login, banned) */
+async function listAuthUsers() {
+  return selectAll(
+    `select id, email, email_confirmed_at, last_sign_in_at, banned_until, created_at
+       from auth.users where deleted_at is null`
+  );
 }
 
 /** { [key]: count } from a Mongo group-by */
@@ -89,10 +89,10 @@ function monthKey(date) {
  * MRR = monthly price of every company with an active PAID plan (unlimited-access
  * companies without a Razorpay subscription pay nothing, so they are left out).
  */
-async function buildRevenue(supabase) {
+async function buildRevenue() {
   const [subscriptions, companies] = await Promise.all([
-    supabase.from('company_subscriptions').select('*').then(unwrap),
-    supabase.from('companies').select('id, name').then(unwrap),
+    selectAll('select * from public.company_subscriptions'),
+    selectAll('select id, name from public.companies'),
   ]);
   const companyName = Object.fromEntries(companies.map((c) => [c.id, c.name]));
 
@@ -111,10 +111,13 @@ async function buildRevenue(supabase) {
   // Payment history needs the subscription_payments table (superadmin migration)
   let payments = [];
   let paymentsAvailable = true;
-  const { data: paymentRows, error: paymentsError } = await supabase
-    .from('subscription_payments')
-    .select('*')
-    .order('paid_at', { ascending: false });
+  let paymentRows = [];
+  let paymentsError = null;
+  try {
+    paymentRows = await selectAll('select * from public.subscription_payments order by paid_at desc');
+  } catch (err) {
+    paymentsError = err;
+  }
   if (paymentsError) {
     paymentsAvailable = false;
     console.warn('[admin] subscription_payments not readable:', paymentsError.message);
@@ -173,17 +176,13 @@ async function buildRevenue(supabase) {
  */
 const getOverview = async (req, res) => {
   try {
-    const supabase = getSupabaseClient();
     const now = Date.now();
     const [companies, profiles, projectCount, revenue, datasets, models, training, trainingActive, inference, inferenceActive] =
       await Promise.all([
-        supabase.from('companies').select('id').then(unwrap),
-        supabase.from('profiles').select('id, is_active, created_at').then(unwrap),
-        supabase.from('projects').select('id', { count: 'exact', head: true }).then((r) => {
-          if (r.error) throw r.error;
-          return r.count || 0;
-        }),
-        buildRevenue(supabase),
+        selectAll('select id from public.companies'),
+        selectAll('select id, is_active, created_at from public.profiles'),
+        db.one('select count(*)::int as n from public.projects').then((r) => r.n),
+        buildRevenue(),
         Dataset.countDocuments(),
         Model.countDocuments(),
         TrainingJob.countDocuments(),
@@ -226,11 +225,10 @@ const getOverview = async (req, res) => {
  */
 const listUsers = async (req, res) => {
   try {
-    const supabase = getSupabaseClient();
     const [profiles, companies, authUsers] = await Promise.all([
-      supabase.from('profiles').select('id, email, name, phone, role, company_id, is_active, created_at').then(unwrap),
-      supabase.from('companies').select('id, name').then(unwrap),
-      listAuthUsers(supabase),
+      selectAll('select id, email, name, phone, role, company_id, is_active, created_at from public.profiles'),
+      selectAll('select id, name from public.companies'),
+      listAuthUsers(),
     ]);
     const companyName = Object.fromEntries(companies.map((c) => [c.id, c.name]));
     const authById = new Map(authUsers.map((u) => [u.id, u]));
@@ -265,7 +263,7 @@ const listUsers = async (req, res) => {
         role: null,
         companyId: null,
         companyName: null,
-        isActive: !auth.banned_until,
+        isActive: !(auth.banned_until && new Date(auth.banned_until) > new Date()),
         isSuperadmin: false,
         emailVerified: !!auth.email_confirmed_at,
         lastSignInAt: auth.last_sign_in_at || null,
@@ -284,13 +282,12 @@ const listUsers = async (req, res) => {
 };
 
 /** Load the target user for a write action and refuse the superadmin / yourself */
-async function loadTargetUser(supabase, userId, req) {
-  const [{ data: profile, error: profileError }, { data: authData, error: authError }] = await Promise.all([
-    supabase.from('profiles').select('id, email, role, company_id, is_active').eq('id', userId).maybeSingle(),
-    supabase.auth.admin.getUserById(userId),
+async function loadTargetUser(userId, req) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(userId || ''))) return { status: 404, message: 'User not found' };
+  const [profile, authUser] = await Promise.all([
+    db.one('select id, email, role, company_id, is_active from public.profiles where id = $1', [userId]),
+    db.one('select id, email, banned_until from auth.users where id = $1 and deleted_at is null', [userId]),
   ]);
-  if (profileError) throw profileError;
-  const authUser = authError ? null : authData?.user || null;
   if (!profile && !authUser) return { status: 404, message: 'User not found' };
   if (userId === req.user.id) return { status: 400, message: 'You cannot do this to your own account' };
   if (profile?.role === 'platform_admin') return { status: 403, message: 'The superadmin account is protected' };
@@ -300,7 +297,8 @@ async function loadTargetUser(supabase, userId, req) {
 /**
  * POST /api/admin/users/:userId/status  { active: boolean }
  * Disables / re-enables sign-in: profiles.is_active (checked by the backend and app)
- * plus a Supabase Auth ban so the user can't get a new session at all.
+ * plus a ban on the login account (auth.users.banned_until) and an immediate sign-out
+ * everywhere, so the user can't get a new session at all.
  */
 const setUserStatus = async (req, res) => {
   try {
@@ -310,17 +308,18 @@ const setUserStatus = async (req, res) => {
       return res.status(400).json({ error: 'Invalid request', message: '"active" must be true or false' });
     }
 
-    const supabase = getSupabaseClient();
-    const target = await loadTargetUser(supabase, userId, req);
+    const target = await loadTargetUser(userId, req);
     if (target.status) return res.status(target.status).json({ error: 'Not allowed', message: target.message });
 
     if (target.profile) {
-      const { error } = await supabase.from('profiles').update({ is_active: active }).eq('id', userId);
-      if (error) throw error;
+      await db.query('update public.profiles set is_active = $2 where id = $1', [userId, active]);
     }
     if (target.authUser) {
-      const { error } = await supabase.auth.admin.updateUserById(userId, { ban_duration: active ? 'none' : BAN_FOREVER });
-      if (error) throw error;
+      await db.query(
+        `update auth.users set banned_until = ${active ? 'null' : BAN_FOREVER_SQL}, updated_at = now() where id = $1`,
+        [userId]
+      );
+      if (!active) await revokeAllSessions(userId);
     }
     invalidateUserCache(userId);
 
@@ -349,26 +348,27 @@ const deleteUser = async (req, res) => {
     const { userId } = req.params;
     const confirmEmail = String(req.body?.confirmEmail || '').trim().toLowerCase();
 
-    const supabase = getSupabaseClient();
-    const target = await loadTargetUser(supabase, userId, req);
+    const target = await loadTargetUser(userId, req);
     if (target.status) return res.status(target.status).json({ error: 'Not allowed', message: target.message });
     if (!target.email || confirmEmail !== target.email.trim().toLowerCase()) {
       return res.status(400).json({ error: 'Confirmation failed', message: "Type the user's email exactly to confirm" });
     }
 
-    // Keep everything the user created: clear created_by so nothing is deleted with them
-    for (const table of ['companies', 'projects', 'datasets', 'company_invites']) {
-      const { error } = await supabase.from(table).update({ created_by: null }).eq('created_by', userId);
-      if (error) throw new Error(`Could not detach ${table} from the user: ${error.message}`);
-    }
-
-    if (target.authUser) {
-      const { error } = await supabase.auth.admin.deleteUser(userId); // profile row is removed with it
-      if (error) throw error;
-    } else {
-      const { error } = await supabase.from('profiles').delete().eq('id', userId);
-      if (error) throw error;
-    }
+    // One transaction: keep everything the user created (clear created_by), then delete the account
+    await db.asSystem(async (client) => {
+      for (const table of ['companies', 'projects', 'datasets', 'company_invites']) {
+        try {
+          await client.query(`update public.${table} set created_by = null where created_by = $1`, [userId]);
+        } catch (err) {
+          throw new Error(`Could not detach ${table} from the user: ${err.message}`);
+        }
+      }
+      if (target.authUser) {
+        await client.query('delete from auth.users where id = $1', [userId]); // profile row is removed with it
+      } else {
+        await client.query('delete from public.profiles where id = $1', [userId]);
+      }
+    });
     invalidateUserCache(userId);
 
     auditService.logAction({
@@ -391,12 +391,11 @@ const deleteUser = async (req, res) => {
  */
 const listCompanies = async (req, res) => {
   try {
-    const supabase = getSupabaseClient();
     const [companies, profiles, projects, subscriptions, datasetsBy, modelsBy, trainingBy, inferenceBy] = await Promise.all([
-      supabase.from('companies').select('id, name, description, admin_email, created_by, created_at').then(unwrap),
-      supabase.from('profiles').select('id, email, role, company_id, is_active').then(unwrap),
-      supabase.from('projects').select('id, company_id').then(unwrap),
-      supabase.from('company_subscriptions').select('*').then(unwrap),
+      selectAll('select id, name, description, admin_email, created_by, created_at from public.companies'),
+      selectAll('select id, email, role, company_id, is_active from public.profiles'),
+      selectAll('select id, company_id from public.projects'),
+      selectAll('select * from public.company_subscriptions'),
       countBy(Dataset, 'company'),
       countBy(Model, 'company'),
       countBy(TrainingJob, 'company'),
@@ -458,14 +457,10 @@ const setCompanyUnlimited = async (req, res) => {
       return res.status(400).json({ error: 'Invalid request', message: '"isUnlimited" must be true or false' });
     }
 
-    const supabase = getSupabaseClient();
-    const company = unwrap(await supabase.from('companies').select('id, name').eq('id', companyId).maybeSingle());
+    const company = await companyById(companyId);
     if (!company) return res.status(404).json({ error: 'Not found', message: 'Company not found' });
 
-    const { error } = await supabase
-      .from('company_subscriptions')
-      .upsert({ company_id: companyId, is_unlimited: isUnlimited }, { onConflict: 'company_id' });
-    if (error) throw error;
+    await db.upsert('public.company_subscriptions', { company_id: companyId, is_unlimited: isUnlimited }, 'company_id');
     invalidateCompanyCache(companyId);
 
     auditService.logAction({
@@ -496,13 +491,10 @@ const setCompanyPlaygroundAccess = async (req, res) => {
       return res.status(400).json({ error: 'Invalid request', message: '"granted" must be true or false' });
     }
 
-    const supabase = getSupabaseClient();
-    const company = unwrap(await supabase.from('companies').select('id, name').eq('id', companyId).maybeSingle());
+    const company = await companyById(companyId);
     if (!company) return res.status(404).json({ error: 'Not found', message: 'Company not found' });
 
-    const current = unwrap(
-      await supabase.from('company_subscriptions').select('*').eq('company_id', companyId).maybeSingle()
-    );
+    const current = await db.one('select * from public.company_subscriptions where company_id = $1', [companyId]);
     if (current?.razorpay_subscription_id && current.status === 'active') {
       const message = `${company.name} pays for its plan through Razorpay, so it can't be changed here.`;
       return res.status(409).json({ error: message, message });
@@ -519,8 +511,7 @@ const setCompanyPlaygroundAccess = async (req, res) => {
         }
       : { company_id: companyId, status: 'cancelled', current_period_end: null, cancel_at_period_end: false };
 
-    const { error } = await supabase.from('company_subscriptions').upsert(update, { onConflict: 'company_id' });
-    if (error) throw error;
+    await db.upsert('public.company_subscriptions', update, 'company_id');
     invalidateCompanyCache(companyId);
 
     auditService.logAction({
@@ -610,8 +601,7 @@ const resetCompany = async (req, res) => {
     const { companyId } = req.params;
     const confirmName = String(req.body?.confirmName || '').trim().toLowerCase();
 
-    const supabase = getSupabaseClient();
-    const company = unwrap(await supabase.from('companies').select('id, name').eq('id', companyId).maybeSingle());
+    const company = await companyById(companyId);
     if (!company) return res.status(404).json({ error: 'Not found', message: 'Company not found' });
     if (isGsn(company.name)) {
       return res.status(403).json({ error: 'Not allowed', message: 'The gsn company cannot be reset' });
@@ -641,8 +631,7 @@ const resetCompany = async (req, res) => {
     const mongo = await deleteCompanyData(companyName);
     steps.push('deleted datasets, models, jobs, reports, progress and files');
 
-    const { error: projectsError } = await supabase.from('projects').delete().eq('company_id', companyId);
-    if (projectsError) throw projectsError;
+    await db.query('delete from public.projects where company_id = $1', [companyId]);
     steps.push('deleted projects');
     invalidateCompanyCache(companyId);
 
@@ -676,8 +665,7 @@ const deleteCompany = async (req, res) => {
     const { companyId } = req.params;
     const confirmName = String(req.body?.confirmName || '').trim().toLowerCase();
 
-    const supabase = getSupabaseClient();
-    const company = unwrap(await supabase.from('companies').select('id, name').eq('id', companyId).maybeSingle());
+    const company = await companyById(companyId);
     if (!company) return res.status(404).json({ error: 'Not found', message: 'Company not found' });
     if (isGsn(company.name)) {
       return res.status(403).json({ error: 'Not allowed', message: 'The gsn company cannot be deleted' });
@@ -699,29 +687,25 @@ const deleteCompany = async (req, res) => {
     }
 
     // 1) Stop billing first, so a deleted company is never charged again
-    const sub = unwrap(
-      await supabase.from('company_subscriptions').select('*').eq('company_id', companyId).maybeSingle()
-    );
+    const sub = await db.one('select * from public.company_subscriptions where company_id = $1', [companyId]);
     if (sub?.razorpay_subscription_id && ['active', 'past_due'].includes(sub.status)) {
       await razorpay.cancelSubscriptionNow(sub.razorpay_subscription_id);
       steps.push('cancelled Razorpay subscription');
     }
 
     // 2) Members stay as users but leave the company
-    const { data: members, error: membersError } = await supabase
-      .from('profiles')
-      .update({ company_id: null, role: null })
-      .eq('company_id', companyId)
-      .select('id');
-    if (membersError) throw membersError;
+    const { rows: members } = await db.query(
+      'update public.profiles set company_id = null, role = null where company_id = $1 returning id',
+      [companyId]
+    );
     (members || []).forEach((m) => invalidateUserCache(m.id));
     steps.push(`removed ${members?.length || 0} member(s) from the company`);
 
-    // 3) Supabase rows: the company (projects, datasets, invites, subscription cascade) + join requests
-    const { error: joinError } = await supabase.from('workspace_join_requests').delete().eq('company_name', companyName);
-    if (joinError) throw joinError;
-    const { error: companyError } = await supabase.from('companies').delete().eq('id', companyId);
-    if (companyError) throw companyError;
+    // 3) Account rows: the company (projects, datasets, invites, subscription cascade) + join requests
+    await db.asSystem(async (client) => {
+      await client.query('delete from public.workspace_join_requests where company_name = $1', [companyName]);
+      await client.query('delete from public.companies where id = $1', [companyId]);
+    });
     steps.push('deleted company, projects and invites');
 
     // 4) MongoDB data and files on disk (audit log is kept as history)
@@ -752,7 +736,7 @@ const deleteCompany = async (req, res) => {
  */
 const getRevenue = async (req, res) => {
   try {
-    res.json(await buildRevenue(getSupabaseClient()));
+    res.json(await buildRevenue());
   } catch (error) {
     console.error('[admin] revenue failed:', error);
     res.status(500).json({ error: 'Could not load revenue', message: error.message });
@@ -822,8 +806,7 @@ const listJobs = async (req, res) => {
 const listAudit = async (req, res) => {
   try {
     const logs = await AuditLog.find({}).sort({ timestamp: -1 }).limit(200).lean();
-    const { data: profiles, error } = await getSupabaseClient().from('profiles').select('id, email');
-    if (error) throw error;
+    const profiles = await selectAll('select id, email from public.profiles');
     const emailById = Object.fromEntries((profiles || []).map((p) => [p.id, p.email]));
 
     res.json({

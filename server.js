@@ -56,20 +56,36 @@ app.use((req, res, next) => {
   const origin = req.headers.origin;
   // Native apps (Expo / Android) often send no Origin header.
   if (!origin || allowAnyOrigin || allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', !origin || allowAnyOrigin ? '*' : origin);
+    // The login cookie only travels to an exact, trusted origin. "*" (no list set) is accepted
+    // for local development only; in production CORS_ORIGIN must list the web app addresses.
+    const echoOrigin = origin && (allowedOrigins.includes(origin) || (allowAnyOrigin && process.env.NODE_ENV !== 'production'));
+    res.header('Access-Control-Allow-Origin', echoOrigin ? origin : '*');
+    if (echoOrigin) {
+      res.header('Access-Control-Allow-Credentials', 'true');
+      res.header('Vary', 'Origin');
+    }
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-User-Id, X-User-Role, X-User-Company, X-User-Email, X-User-Company-Id');
-    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Client, X-User-Id, X-User-Role, X-User-Company, X-User-Email, X-User-Company-Id');
     if (req.method === 'OPTIONS') return res.sendStatus(200);
     return next();
   }
   return res.status(403).json({ error: 'CORS origin denied' });
 });
 
+// Cookies (the web app's login refresh cookie lives under /api/auth)
+app.use(require('cookie-parser')());
+
 // ✅ Health check endpoint (public, no authentication required)
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// ✅ Login routes (sign up, sign in, tokens, email links, Google). Mounted before the global
+// check below: the public ones answer here; /me, /change-password and /logout-all check the token themselves.
+app.use('/api/auth', require('./routes/auth'));
+
+// ✅ Organisation invite lookup for the invite link page (public: the secret token is the access)
+app.use('/api/invites', require('./routes/invitesPublic'));
 
 // ✅ Global authentication middleware for all /api routes
 // This ensures all API endpoints require authentication by default
@@ -187,6 +203,10 @@ app.use('/api/playground', playgroundRoutes);
 // ✅ Register temporary extinguisher OCR demo routes
 // All routes in routes/demoExtinguisherRoutes.js will be prefixed with /api/demo/extinguisher
 app.use('/api/demo/extinguisher', demoExtinguisherRoutes);
+
+// ✅ The signed-in person's own data: profile, organisation, members, invites, projects,
+// join requests. All routes in routes/account.js are prefixed with /api/account
+app.use('/api/account', require('./routes/account'));
 
 // ✅ Register user management routes
 // All routes in routes/users.js will be prefixed with /api/users

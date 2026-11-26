@@ -205,27 +205,10 @@ function getUserIdFromHeaders(req) {
  * @returns {Promise<{valid: boolean, role: string|null}>}
  */
 async function verifyUserRole(userId, claimedRole) {
-  // TODO: Implement database query to verify user role
-  // Example for MongoDB:
-  // const User = require('../models/User');
-  // const user = await User.findById(userId);
-  // if (!user) return { valid: false, role: null };
-  // return { valid: user.role === claimedRole, role: user.role };
-  
-  // Example for Supabase:
-  // const { getSupabaseClient } = require('../services/supabaseService');
-  // const supabase = getSupabaseClient();
-  // const { data: profile, error } = await supabase
-  //   .from('profiles')
-  //   .select('role')
-  //   .eq('id', userId)
-  //   .single();
-  // if (error || !profile) return { valid: false, role: null };
-  // return { valid: profile.role === claimedRole, role: profile.role };
-  
-  // For now, return the claimed role (backend should implement proper verification)
-  // This maintains backward compatibility while allowing future database verification
-  return { valid: true, role: claimedRole };
+  const { getUserRole } = require('../services/accountService');
+  const role = await getUserRole(userId);
+  if (!role) return { valid: false, role: null };
+  return { valid: role === claimedRole, role };
 }
 
 // Export rolePermissions as alias for PERMISSIONS (for backward compatibility with documentation)

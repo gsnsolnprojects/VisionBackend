@@ -1,21 +1,18 @@
 const { VALID_ROLES } = require('../utils/permissions');
-const { getSupabaseClient } = require('../services/supabaseService');
 const { getCompanyAccess } = require('../utils/plans');
+const db = require('../db');
+const { verifyAccessToken, isBanned } = require('../services/authService');
 
 /**
  * Authentication Middleware
  *
- * Verifies the Supabase access token sent in the Authorization header and loads
- * the user's role and company from the Supabase profiles table.
+ * Verifies our own access token (JWT signed with AUTH_JWT_SECRET, see services/authService.js)
+ * sent in the Authorization header and loads the user's role and company from the profiles table.
  *
  * The X-User-* headers that clients still send are NOT trusted: identity, role
  * and company always come from the verified token + database, so a caller can't
  * claim to be someone else (or an admin) by editing headers.
  */
-
-// Verified tokens, so we don't call Supabase on every request (token -> { userId, email, expiresAt })
-const tokenCache = new Map();
-const TOKEN_CACHE_MS = 5 * 60 * 1000;
 
 // Profile + company per user; short-lived so role / deactivation changes apply within seconds
 const profileCache = new Map();
@@ -36,73 +33,38 @@ function pruneCache(cache) {
   while (cache.size > MAX_CACHE_ENTRIES) cache.delete(cache.keys().next().value);
 }
 
-/** Expiry time (ms) inside a JWT, or null if it can't be read */
-function getJwtExpiryMs(token) {
-  try {
-    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
-    return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Verify the token with Supabase (cached). Returns { userId, email } or null */
+/** Verify the access token (no network call). Returns { userId, email } or null */
 async function verifyToken(token) {
-  const now = Date.now();
-  const cached = tokenCache.get(token);
-  if (cached && cached.expiresAt > now) return cached;
-
-  const supabase = getSupabaseClient();
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data?.user) {
-    tokenCache.delete(token);
-    return null;
-  }
-
-  const jwtExpiry = getJwtExpiryMs(token);
-  const entry = {
-    userId: data.user.id,
-    email: data.user.email || null,
-    expiresAt: Math.min(now + TOKEN_CACHE_MS, jwtExpiry || now + TOKEN_CACHE_MS),
-  };
-  tokenCache.set(token, entry);
-  pruneCache(tokenCache);
-  return entry;
+  return verifyAccessToken(token);
 }
 
-/** Load role / company for a user from Supabase (cached). Returns null if no profile */
+/** Load role / company for a user (cached). Returns null if no profile */
 async function loadProfile(userId) {
   const now = Date.now();
   const cached = profileCache.get(userId);
   if (cached && cached.expiresAt > now) return cached.profile;
 
-  const supabase = getSupabaseClient();
-  const { data: profile, error } = await supabase
-    .from('profiles')
-    .select('id, email, name, role, company_id, is_active')
-    .eq('id', userId)
-    .maybeSingle();
-  if (error) throw error;
+  const profile = await db.one(
+    `select p.id, p.email, p.name, p.role, p.company_id, p.is_active, c.name as company_name,
+            u.banned_until
+       from public.profiles p
+       join auth.users u on u.id = p.id
+       left join public.companies c on c.id = p.company_id
+      where p.id = $1 and u.deleted_at is null`,
+    [userId]
+  );
 
-  let companyName = null;
   let subscription = null;
   if (profile?.company_id) {
-    const [{ data: company, error: companyError }, { data: subRow, error: subError }] = await Promise.all([
-      supabase.from('companies').select('name').eq('id', profile.company_id).maybeSingle(),
-      supabase
-        .from('company_subscriptions')
-        .select('*')
-        .eq('company_id', profile.company_id)
-        .maybeSingle(),
-    ]);
-    if (companyError) throw companyError;
-    companyName = company?.name || null;
-    // A subscription lookup problem must never block sign-in; treat it as "no plan"
-    if (subError) console.warn('[auth] Could not load company subscription:', subError.message);
-    subscription = subError ? null : subRow || null;
+    try {
+      subscription = await db.one('select * from public.company_subscriptions where company_id = $1', [profile.company_id]);
+    } catch (subError) {
+      // A subscription lookup problem must never block sign-in; treat it as "no plan"
+      console.warn('[auth] Could not load company subscription:', subError.message);
+    }
   }
 
-  const result = profile ? { ...profile, company_name: companyName, subscription } : null;
+  const result = profile ? { ...profile, subscription } : null;
   profileCache.set(userId, { profile: result, expiresAt: now + PROFILE_CACHE_MS });
   pruneCache(profileCache);
   return result;
@@ -128,7 +90,7 @@ async function resolveUser(req) {
   if (!profile) {
     return { status: 403, error: 'Forbidden', message: 'User profile not found' };
   }
-  if (profile.is_active === false) {
+  if (profile.is_active === false || isBanned(profile)) {
     return { status: 403, error: 'Forbidden', message: 'Your account has been deactivated. Please contact your administrator.' };
   }
 
@@ -152,10 +114,10 @@ async function resolveUser(req) {
 
 /**
  * Authenticate token middleware
- * Verifies the Supabase access token and attaches the user to req.user.
+ * Verifies the access token and attaches the user to req.user.
  *
  * Required header:
- * - Authorization: Bearer <Supabase access token>
+ * - Authorization: Bearer <access token from /api/auth/login or /api/auth/refresh>
  *
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object

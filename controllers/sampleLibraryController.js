@@ -9,7 +9,7 @@ const { isPlaygroundHiddenClass } = require('../services/playgroundRunService');
 const Model = require('../models/Model');
 const SampleLibraryItem = require('../models/SampleLibraryItem');
 const { copyDataset } = require('../services/datasetCopyService');
-const { getSupabaseClient } = require('../services/supabaseService');
+const db = require('../db');
 const auditService = require('../services/auditService');
 const { SAMPLE_COMPANY, readyGsnDatasetFilter, isOnThisServer } = require('../services/sampleLibraryService');
 
@@ -60,7 +60,7 @@ async function uniqueName(base, isTaken) {
   throw new Error('Could not find a free name for the copy');
 }
 
-/** The target project must be one of the caller's own company projects (Supabase is the source of truth) */
+/** The target project must be one of the caller's own company projects (the projects table is the source of truth) */
 async function resolveTargetProject(req) {
   const project = String(req.body?.project || '').trim();
   if (!req.user?.company || !req.user?.company_id) {
@@ -68,13 +68,10 @@ async function resolveTargetProject(req) {
   }
   if (!project) return { status: 400, message: 'Choose a project to add the sample to' };
 
-  const { data, error } = await getSupabaseClient()
-    .from('projects')
-    .select('id, name')
-    .eq('company_id', req.user.company_id)
-    .eq('name', project)
-    .maybeSingle();
-  if (error) throw error;
+  const data = await db.one(
+    'select id, name from public.projects where company_id = $1 and name = $2 limit 1',
+    [req.user.company_id, project]
+  );
   if (!data) return { status: 404, message: `Project "${project}" was not found in your organisation` };
   return { company: req.user.company, project: data.name };
 }

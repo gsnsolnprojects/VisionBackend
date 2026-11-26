@@ -14,7 +14,7 @@ const mongoose = require('mongoose');
 const InferenceJob = require('../models/InferenceJob');
 const ActionItem = require('../models/ActionItem');
 const { findOrCreateObservation } = require('../utils/observationService');
-const { getUserProfile } = require('../services/supabaseService');
+const { getUserProfile } = require('../services/accountService');
 
 async function run() {
   await mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/visiondb');

@@ -14,7 +14,7 @@ const { inferenceQueue } = require('../queue');
 const { resolveModelCheckpointPath } = require('../services/resolveModelCheckpoint');
 const { SAMPLE_COMPANY } = require('../services/sampleLibraryService');
 const { canAccessAllWorkspaces } = require('../utils/workspaceScoping');
-const { getSupabaseClient } = require('../services/supabaseService');
+const db = require('../db');
 const { markPracticeDone } = require('../services/playgroundProgressService');
 const { listLevels, startLevel, saveProgress } = require('../services/playgroundLevelService');
 const { syncBadges, markBadgesSeen } = require('../services/playgroundBadgeService');
@@ -106,7 +106,7 @@ const createReport = async (req, res) => {
     // Who made the report, for its Details: the name from their profile, or just their email
     let preparedByName = null;
     try {
-      const { data } = await getSupabaseClient().from('profiles').select('name').eq('id', req.user.id).maybeSingle();
+      const data = await db.one('select name from public.profiles where id = $1', [req.user.id]);
       preparedByName = typeof data?.name === 'string' && data.name.trim() ? data.name.trim().slice(0, 80) : null;
     } catch (err) {
       console.warn('[playground] report: could not read the name of the user:', err.message);

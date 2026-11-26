@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const { PLANS } = require('../utils/plans');
-const { getSupabaseClient } = require('./supabaseService');
+const db = require('../db');
 
 /**
  * Razorpay Service
@@ -194,13 +194,10 @@ async function applyRazorpaySubscription(rzpSub) {
     return { applied: false, reason: `ignored status ${rzpSub.status}` };
   }
 
-  const supabase = getSupabaseClient();
-  const { data: current, error: readError } = await supabase
-    .from('company_subscriptions')
-    .select('razorpay_subscription_id, plan, status')
-    .eq('company_id', notes.company_id)
-    .maybeSingle();
-  if (readError) throw readError;
+  const current = await db.one(
+    'select razorpay_subscription_id, plan, status from public.company_subscriptions where company_id = $1',
+    [notes.company_id]
+  );
 
   // Don't let a late event from an older, replaced subscription overwrite the current one
   if (current?.razorpay_subscription_id && current.razorpay_subscription_id !== rzpSub.id && status !== 'active') {
@@ -222,8 +219,7 @@ async function applyRazorpaySubscription(rzpSub) {
   if (rzpSub.current_end) update.current_period_end = new Date(rzpSub.current_end * 1000).toISOString();
   if (status !== 'active') update.cancel_at_period_end = false;
 
-  const { error } = await supabase.from('company_subscriptions').upsert(update, { onConflict: 'company_id' });
-  if (error) throw error;
+  await db.upsert('public.company_subscriptions', update, 'company_id');
   return { applied: true, companyId: notes.company_id, status };
 }
 
@@ -244,8 +240,8 @@ async function recordSubscriptionPayment(payment, rzpSub) {
     return { recorded: false, reason: `payment not captured (${payment?.status || 'missing'})` };
   }
 
-  const supabase = getSupabaseClient();
-  const { error } = await supabase.from('subscription_payments').upsert(
+  await db.upsert(
+    'public.subscription_payments',
     {
       razorpay_payment_id: payment.id,
       company_id: notes.company_id,
@@ -257,9 +253,8 @@ async function recordSubscriptionPayment(payment, rzpSub) {
       status: payment.status,
       paid_at: new Date((payment.created_at || Date.now() / 1000) * 1000).toISOString(),
     },
-    { onConflict: 'razorpay_payment_id' }
+    'razorpay_payment_id'
   );
-  if (error) throw error;
   return { recorded: true };
 }
 

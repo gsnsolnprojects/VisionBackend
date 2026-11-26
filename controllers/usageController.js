@@ -6,7 +6,7 @@ const GpuServerSession = require('../models/GpuServerSession');
 const { switchOns } = require('../utils/gpuSessions');
 const UsageRecord = require('../models/UsageRecord');
 const { canAccessAllWorkspaces } = require('../utils/workspaceScoping');
-const { getSupabaseClient } = require('../services/supabaseService');
+const db = require('../db');
 
 /**
  * GET /api/usage/activity?month=YYYY-MM[&company=<name>|all]
@@ -35,13 +35,13 @@ function monthRange(month) {
 const minutesBetween = (a, b) => (a && b ? Math.max(0, (new Date(b) - new Date(a)) / 60000) : null);
 const round1 = (n) => (n == null ? null : Math.round(n * 10) / 10);
 
-/** userId -> { name, email } from Supabase profiles */
+/** userId -> { name, email } from profiles */
 async function loadPeople(userIds) {
-  // Only real user ids: one non-UUID value makes the whole Supabase query fail
+  // Only real user ids: one non-UUID value makes the whole query fail
   const ids = [...new Set(userIds.filter((id) => /^[0-9a-f-]{36}$/i.test(id || '')))];
   if (!ids.length) return new Map();
   try {
-    const { data } = await getSupabaseClient().from('profiles').select('id, name, email').in('id', ids);
+    const { rows: data } = await db.query('select id, name, email from public.profiles where id = any($1::uuid[])', [ids]);
     return new Map((data || []).map((p) => [p.id, { name: p.name || p.email || 'Unknown', email: p.email || null }]));
   } catch {
     return new Map();

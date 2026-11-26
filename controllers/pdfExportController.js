@@ -17,7 +17,7 @@ const { attachResurveyFlags } = require('./actionItemController');
 const { deriveSeverityFromPercent } = require('../utils/severity');
 const { resolveInferenceImagePath } = require('../utils/resolveInferenceImagePath');
 const auditService = require('../services/auditService');
-const { getUserProfile } = require('../services/supabaseService');
+const { getUserProfile } = require('../services/accountService');
 
 const actionItemsDir = path.join(process.cwd(), 'uploads', 'action-items');
 

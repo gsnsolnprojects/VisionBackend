@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 const Dataset = require('../models/Dataset');
 const Model = require('../models/Model');
 const auditService = require('../services/auditService');
-const { getSupabaseClient } = require('../services/supabaseService');
+const db = require('../db');
 
 /**
  * Superadmin: choose which datasets (and the models trained on them) get copied to the
@@ -15,23 +15,19 @@ const { getSupabaseClient } = require('../services/supabaseService');
  *                                     version with size, images and models
  * PUT /api/admin/publish/selection  { datasetIds: string[] } - the full new selection
  * PUT /api/admin/publish/project    { projectId, publish } - show / hide a whole project on the
- *                                     live site (Supabase projects.publish_to_live)
+ *                                     live site (projects.publish_to_live)
  */
 
-/** Supabase projects with their company names: [{ id, name, company, publish }] */
+/** Projects with their company names: [{ id, name, company, publish }] */
 async function loadProjects() {
-  const supabase = getSupabaseClient();
-  const [{ data: projects, error: pError }, { data: companies, error: cError }] = await Promise.all([
-    supabase.from('projects').select('id, name, company_id, publish_to_live'),
-    supabase.from('companies').select('id, name'),
-  ]);
-  if (pError) throw pError;
-  if (cError) throw cError;
-  const companyName = new Map((companies || []).map((c) => [c.id, c.name]));
-  return (projects || []).map((p) => ({
+  const { rows } = await db.query(
+    `select p.id, p.name, p.publish_to_live, c.name as company_name
+       from public.projects p left join public.companies c on c.id = p.company_id`
+  );
+  return rows.map((p) => ({
     id: p.id,
     name: String(p.name || '').trim(),
-    company: companyName.get(p.company_id) || null,
+    company: p.company_name || null,
     publish: p.publish_to_live !== false,
   }));
 }
@@ -230,8 +226,7 @@ const setProjectPublish = async (req, res) => {
     const project = (await loadProjects()).find((p) => p.id === projectId);
     if (!project) return res.status(404).json({ error: 'Not found', message: 'Project not found' });
 
-    const { error } = await getSupabaseClient().from('projects').update({ publish_to_live: publish }).eq('id', projectId);
-    if (error) throw error;
+    await db.query('update public.projects set publish_to_live = $2 where id = $1', [projectId, publish]);
 
     // A hidden project's datasets can't be published either
     let unticked = 0;

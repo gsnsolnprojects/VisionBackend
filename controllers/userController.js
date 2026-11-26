@@ -1,6 +1,7 @@
 const { isValidRole } = require('../utils/permissions');
 const { validateRoleAssignment } = require('../middleware/authorizationMiddleware');
-const { getUserProfile, updateUserActive, deactivateAndRemoveFromWorkspace, deleteAuthUser } = require('../services/supabaseService');
+const { getUserProfile, updateUserActive, deactivateAndRemoveFromWorkspace, deleteAuthUser } = require('../services/accountService');
+const { invalidateUserCache } = require('../middleware/authMiddleware');
 
 /**
  * User Controller
@@ -148,15 +149,37 @@ const updateUserRoleHandler = async (req, res) => {
       // In a production system, you might want to add targetUserCompany to request body
     }
 
-    // Backend validates permissions and returns success
-    // Frontend is responsible for actually updating the role in Supabase
-    // This endpoint serves as a permission validation endpoint
+    // The target must be in the admin's own organisation (the superadmin may change anyone)
+    const target = await getUserProfile(userId);
+    if (!target) {
+      return res.status(404).json({ success: false, error: 'Not found', message: 'User not found' });
+    }
+    if (currentUserRole !== 'platform_admin' && target.company_id !== currentUser.company_id) {
+      return res.status(403).json({
+        success: false,
+        error: 'Permission denied',
+        message: 'You can only change roles of members of your own organisation'
+      });
+    }
+    if (target.role === 'platform_admin' && currentUserRole !== 'platform_admin') {
+      return res.status(403).json({ success: false, error: 'Permission denied', message: 'The superadmin account is protected' });
+    }
+
+    // Save it as the admin (the profiles rules and triggers check it once more)
+    const db = require('../db');
+    const { rowCount } = await db.asUser({ id: currentUser.id, email: currentUser.email }, (c) =>
+      c.query('update public.profiles set role = $2 where id = $1', [userId, newRole])
+    );
+    if (!rowCount) {
+      return res.status(403).json({ success: false, error: 'Permission denied', message: 'You are not allowed to change this role' });
+    }
+    invalidateUserCache(userId);
+
     return res.status(200).json({
       success: true,
-      message: 'Role assignment authorized. Frontend should update role in Supabase.',
+      message: 'Role updated',
       userId: userId,
-      newRole: newRole,
-      note: 'Backend has validated permissions. Frontend must update the role in Supabase profiles table.'
+      newRole: newRole
     });
 
   } catch (error) {
